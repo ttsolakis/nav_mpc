@@ -1,17 +1,26 @@
 # nav_mpc/planner/planner.py
 
 import numpy as np
-import tinympc
+import scipy.sparse as sp
+import osqp
 
 
-class TinyMPCPlanner:
+class OSQPMPCPlanner:
     """
-    Minimal TinyMPC-based planner with constant (A, B, Q, R).
+    Minimal OSQP-based MPC planner for LTI systems.
+
+    System:
+        x_{k+1} = A x_k + B u_k
+
+    Cost:
+        sum_{k=0}^{N-1} (x_k - x_ref)^T Q (x_k - x_ref)
+        + (x_N - x_ref)^T Q (x_N - x_ref)
+        + sum_{k=0}^{N-1} u_k^T R u_k
 
     For now:
-      - assumes fixed linear dynamics x_{k+1} = A x_k + B u_k
-      - uses constant quadratic cost Q, R
-      - no constraints
+      - fixed A, B, Q, R, horizon N
+      - no explicit state/input bounds (only dynamics constraints)
+      - x_ref is taken as constant over the horizon (first column of x_ref)
     """
 
     def __init__(
@@ -21,29 +30,8 @@ class TinyMPCPlanner:
         Q: np.ndarray,
         R: np.ndarray,
         N: int,
-        rho: float = 1.0,
         verbose: bool = False,
     ) -> None:
-        """
-        Initialize the TinyMPC solver with constant (A, B, Q, R).
-
-        Parameters
-        ----------
-        A : np.ndarray
-            State transition matrix, shape (nx, nx).
-        B : np.ndarray
-            Input matrix, shape (nx, nu).
-        Q : np.ndarray
-            State cost matrix, shape (nx, nx). (TinyMPC expects diagonal.)
-        R : np.ndarray
-            Input cost matrix, shape (nu, nu). (TinyMPC expects diagonal.)
-        N : int
-            Horizon length.
-        rho : float, optional
-            ADMM penalty parameter, by default 1.0.
-        verbose : bool, optional
-            If True, TinyMPC prints solver info.
-        """
         A = np.asarray(A, dtype=float)
         B = np.asarray(B, dtype=float)
         Q = np.asarray(Q, dtype=float)
@@ -54,14 +42,72 @@ class TinyMPCPlanner:
         nx3, nu = B.shape
         assert nx3 == nx, f"A and B must have same number of rows, got {A.shape}, {B.shape}"
         assert Q.shape == (nx, nx), f"Q must have shape ({nx}, {nx}), got {Q.shape}"
-        assert R.shape == (nu, nu), f"R must have shape ({nu}, {nu}), got {R.shape}"
+        assert R.shape == (nu, nu), f"R must have shape ({nu, nu}), got {R.shape}"
 
+        self.A = A
+        self.B = B
+        self.Q = Q
+        self.R = R
         self.nx = nx
         self.nu = nu
         self.N = int(N)
 
-        self.solver = tinympc.TinyMPC()
-        self.solver.setup(A, B, Q, R, self.N, rho=rho, verbose=verbose)
+        # ---------- QP structure (P, A) ----------
+
+        nx = self.nx
+        nu = self.nu
+        N = self.N
+
+        # Cost matrix P: block-diag(Q,...,Q,QN,R,...,R)
+        QN = Q
+        P = sp.block_diag(
+            [
+                sp.kron(sp.eye(N), Q),  # x_0..x_{N-1}
+                QN,                     # x_N
+                sp.kron(sp.eye(N), R),  # u_0..u_{N-1}
+            ],
+            format="csc",
+        )
+        self.P = P
+
+        # Placeholder q for setup (we update it in solve)
+        q0 = np.zeros(P.shape[0])
+
+        # ---------- Dynamics constraints ----------
+        # x_{k+1} = A x_k + B u_k
+        Ad = sp.csc_matrix(A)
+        Bd = sp.csc_matrix(B)
+
+        Ax = sp.kron(sp.eye(N + 1), -sp.eye(nx)) + sp.kron(
+            sp.eye(N + 1, k=-1), Ad
+        )
+        Bu = sp.kron(
+            sp.vstack([sp.csc_matrix((1, N)), sp.eye(N)]),
+            Bd,
+        )
+        Aeq = sp.hstack([Ax, Bu], format="csc")
+
+        # No inequality constraints yet -> A = Aeq
+        A = Aeq
+        self.A_mat = A
+
+        # Equality bounds l = u = beq
+        leq = np.zeros((N + 1) * nx)
+        ueq = np.zeros((N + 1) * nx)
+        self.l = leq.copy()
+        self.u = ueq.copy()
+
+        # ---------- OSQP problem ----------
+        self.prob = osqp.OSQP()
+        self.prob.setup(
+            P=P,
+            q=q0,
+            A=A,
+            l=self.l,
+            u=self.u,
+            verbose=verbose,
+            warm_start=True,
+        )
 
     def solve(
         self,
@@ -78,48 +124,66 @@ class TinyMPCPlanner:
             Initial state, shape (nx,).
         x_ref : np.ndarray, optional
             State reference trajectory, shape (nx, N).
-            If None, zero reference is used.
+            Currently only the first column is used (constant ref).
         u_ref : np.ndarray, optional
-            Input reference trajectory, shape (nu, N-1).
-            If None, zero reference is used.
+            Not used yet (kept for API compatibility).
 
         Returns
         -------
         u0 : np.ndarray
             First control action, shape (nu,).
         X_pred : np.ndarray
-            Predicted state trajectory, shape (N, nx).
+            Predicted state trajectory, shape (N+1, nx).
         U_pred : np.ndarray
-            Predicted input trajectory, shape (N-1, nu).
+            Predicted input trajectory, shape (N, nu).
         """
-        x0 = np.asarray(x0, dtype=float).reshape(-1)
-        assert x0.size == self.nx, f"x0 must have size {self.nx}, got {x0.size}"
+        nx = self.nx
+        nu = self.nu
+        N = self.N
 
-        # Default references: zero
+        x0 = np.asarray(x0, dtype=float).reshape(-1)
+        assert x0.size == nx, f"x0 must have size {nx}, got {x0.size}"
+
+        # ---- build q from reference ----
         if x_ref is None:
-            x_ref = np.zeros((self.nx, self.N), dtype=float)
+            x_ref_vec = np.zeros(nx)
         else:
             x_ref = np.asarray(x_ref, dtype=float)
-            assert x_ref.shape == (self.nx, self.N), (
-                f"x_ref must have shape ({self.nx}, {self.N}), got {x_ref.shape}"
+            assert x_ref.shape == (nx, N), (
+                f"x_ref must have shape ({nx}, {N}), got {x_ref.shape}"
             )
+            x_ref_vec = x_ref[:, 0]
 
-        if u_ref is None:
-            u_ref = np.zeros((self.nu, self.N - 1), dtype=float)
-        else:
-            u_ref = np.asarray(u_ref, dtype=float)
-            assert u_ref.shape == (self.nu, self.N - 1), (
-                f"u_ref must have shape ({self.nu}, {self.N - 1}), got {u_ref.shape}"
-            )
+        Q = self.Q
+        QN = self.Q
+        q_x = np.kron(np.ones(N), -Q @ x_ref_vec)
+        q_xN = -QN @ x_ref_vec
+        q_u = np.zeros(N * nu)
+        q = np.hstack([q_x, q_xN, q_u])
 
-        self.solver.set_x0(x0)
-        self.solver.set_x_ref(x_ref)
-        self.solver.set_u_ref(u_ref)
+        # ---- initial state constraint: l[:nx] = u[:nx] = -x0 ----
+        l = self.l.copy()
+        u = self.u.copy()
+        l[:nx] = -x0
+        u[:nx] = -x0
 
-        solution = self.solver.solve()
+        # ---- update OSQP and solve ----
+        self.prob.update(q=q, l=l, u=u)
+        res = self.prob.solve()
 
-        u0 = solution["controls"]           # (nu,)
-        X_pred = solution["states_all"].T   # (N, nx)
-        U_pred = solution["controls_all"].T # (N-1, nu)
+        if res.info.status_val not in (1,):  # 1 = solved
+            raise RuntimeError(f"OSQP did not solve the problem: {res.info.status}")
+
+        z = res.x
+
+        # ---- extract trajectories ----
+        x_block_size = (N + 1) * nx
+        x_flat = z[:x_block_size]
+        u_flat = z[x_block_size:]
+
+        X_pred = x_flat.reshape(N + 1, nx)
+        U_pred = u_flat.reshape(N, nu)
+
+        u0 = U_pred[0]
 
         return u0, X_pred, U_pred

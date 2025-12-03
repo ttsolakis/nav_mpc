@@ -1,2 +1,3 @@
 numpy
-tinympc
+scipy
+osqp

@@ -1,7 +1,7 @@
 # nav_mpc/main.py
 
 import numpy as np
-from planner.planner import TinyMPCPlanner
+from planner.planner import OSQPMPCPlanner
 
 
 def main():
@@ -26,15 +26,14 @@ def main():
 
     N = 20
 
-    planner = TinyMPCPlanner(A, B, Q, R, N, rho=1.0, verbose=True)
+    planner = OSQPMPCPlanner(A, B, Q, R, N, verbose=True)
 
     x0 = np.array([0.0, 0.0])
     x_goal = np.array([1.0, 0.0])
 
     # Constant state reference over horizon
     x_ref = np.tile(x_goal.reshape(nx, 1), (1, N))
-    # Zero input reference
-    u_ref = np.zeros((nu, N - 1))
+    u_ref = np.zeros((nu, N - 1))  # currently ignored, kept for symmetry
 
     u0, X_pred, U_pred = planner.solve(x0, x_ref, u_ref)
 
@@ -45,3 +44,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
