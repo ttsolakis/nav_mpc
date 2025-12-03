@@ -1,64 +1,50 @@
 # nav_mpc/models/simple_pendulum_model.py
 
-import numpy as np
+import sympy as sp
 from .dynamics import SystemModel
 
 
 class SimplePendulumModel(SystemModel):
     """
-    Simple pendulum model to test pipeline.
+    Simple pendulum model (symbolic) to test the pipeline.
+
+    Dynamics:
+        x_dot = f(x, u)
+
     State:
-        x = [Θ1 θ2]^T
-          θ1  : angular position [rad]
-          θ2  : angular velocity [rad/s]
+        x = [θ1, θ2]^T
+          x[0] = θ1 : angular position [rad]
+          x[1] = θ2 : angular velocity [rad/s]
 
     Input:
-        u = Τ
-          Τ : torque input [Nm]
+        u = [τ]
+          u[0] = τ : torque input [Nm]
 
     Parameters
     ----------
-    g : float
-        Acceleration of gravity [m/s^2].
-    l : float
-        Length of the pendulum [m].
+    g : acceleration of gravity [m/s^2].
+    l : length of the pendulum [m].
     """
 
     def __init__(self) -> None:
-        
-        # Define state and input dimensions
-        state_dim = 2  # 2 states: θ1, θ2
-        input_dim = 1  # 1 input: Τ
+
+        # Model dimensions
+        state_dim = 2  
+        input_dim = 1
+
+        # Model parameters
+        self.g = 9.81
+        self.l = 0.1
+
+        # This will create x_sym, u_sym and call build_dynamics()
         super().__init__(state_dim, input_dim)
 
-        # Define model parameters
-        self.g = float(9.81)  # Acceleration of gravity [m/s^2]
-        self.l = float(0.1)   # Length of the pendulum [m]
+    def build_dynamics(self) -> None:
+        x = self.x_sym  
+        u = self.u_sym
 
-    def f(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
-        """
-        Continuous-time dynamics x_dot = f(x, u).
+        # Dynamics equations:
+        f0 = x[1]                                   # θ1_dot = θ2
+        f1 = u[0] - self.g / self.l * sp.sin(x[0])  # θ2_dot = τ - (g/l) sin(θ1)
 
-        Parameters
-        ----------
-        x : np.ndarray
-            State vector [θ1, θ2], shape (2,).
-        u : np.ndarray
-            Input vector [Τ], shape (1,).
-
-        Returns
-        -------
-        x_dot : np.ndarray
-            Time derivative [θ1_dot, θ2_dot], shape (2,).
-        """
-        x = np.asarray(x).reshape(-1)
-        u = np.asarray(u).reshape(-1)
-
-        θ1, θ2 = x
-        Τ = u[0]
-
-        x_dot = np.empty(2, dtype=float)
-        x_dot[0] = θ2
-        x_dot[1] = (Τ - self.g / self.l * np.sin(θ1))
-
-        return x_dot
+        self.f_sym = sp.Matrix([f0, f1])
