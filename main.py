@@ -1,11 +1,22 @@
 # nav_mpc/main.py
+
+import time
+
 import numpy as np
+from scipy.linalg import expm
+
 from models.simple_pendulum_model import SimplePendulumModel
 from qp_formulation.qp_formulation import build_linearized_system
 
-from scipy.linalg import expm  # or put at top of file
 
-def discretize(A, B, c, dt):
+def discretize_affine(A: np.ndarray,
+                      B: np.ndarray,
+                      c: np.ndarray,
+                      dt: float):
+    """
+    x_dot = A x + B u + c  →  x_{k+1} = Ad x_k + Bd u_k + cd
+    using block-matrix exponential.
+    """
     A = np.asarray(A, dtype=float)
     B = np.asarray(B, dtype=float)
     c = np.asarray(c, dtype=float).reshape(-1)
@@ -13,130 +24,126 @@ def discretize(A, B, c, dt):
     n = A.shape[0]
     m = B.shape[1]
 
-    B_tilde = np.hstack([B, c.reshape(-1, 1)])  # n x (m+1)
-
-    big_dim = n + m + 1
-    M = np.zeros((big_dim, big_dim))
+    M = np.zeros((n + m + 1, n + m + 1), dtype=float)
     M[:n, :n] = A
-    M[:n, n:] = B_tilde
+    M[:n, n:n + m] = B
+    M[:n, n + m] = c
+    M[n + m, n + m] = 1.0
 
-    M_d = expm(M * dt)
+    Md = expm(M * dt)
 
-    Ad = M_d[:n, :n]
-    B_tilde_d = M_d[:n, n:]
-    Bd = B_tilde_d[:, :m]
-    cd = B_tilde_d[:, m]
+    Ad = Md[:n, :n]
+    Bd = Md[:n, n:n + m]
+    cd = Md[:n, n + m]
 
     return Ad, Bd, cd
 
+
 def main():
-
-   # 1) Choose a system model (symbolic)
+    # 1) System
     system = SimplePendulumModel()
+    n = system.state_dim
+    m = system.input_dim
 
-    # 2) Build continuous-time affine linearization symbolically:
-    #    ẋ = A(x̄,ū) x + B(x̄,ū) u + c(x̄,ū)
-    (A_bar_sym, B_bar_sym, c_bar_sym, x_bar_sym, u_bar_sym, xdot_lin_sym) = build_linearized_system(system)
+    # 2) Symbolic linearization + lambdified callables
+    (A_fun, B_fun, c_fun) = build_linearized_system(system)
 
-    # ------------------------------------------------------------------
-    # 3) Choose a *numeric* operating point (x̄, ū)
-    #    For the simple pendulum, e.g. downward equilibrium: θ = 0, θdot = 0, τ = 0
-    # ------------------------------------------------------------------
-    x_bar_val = np.array([0.0, 0.0])   # [θ̄, θ̄dot]
-    u_bar_val = np.array([0.0])        # [τ̄]
+    N = 20
+    dt = 0.01
 
-    # Build substitution dict: {x̄_i -> value, ū_j -> value}
-    subs_numeric = {}
-    for i in range(system.state_dim):
-        subs_numeric[x_bar_sym[i]] = float(x_bar_val[i])
-    for j in range(system.input_dim):
-        subs_numeric[u_bar_sym[j]] = float(u_bar_val[j])
+    # Fake a sequence of operating points (x̄_k, ū_k)
+    rng = np.random.default_rng(seed=42)   # <--- important: reproducible tests
 
-    # Evaluate A(x̄,ū), B(x̄,ū), c(x̄,ū) numerically
-    A_num = np.array(A_bar_sym.subs(subs_numeric), dtype=float)
-    B_num = np.array(B_bar_sym.subs(subs_numeric), dtype=float)
-    c_num = np.array(c_bar_sym.subs(subs_numeric), dtype=float).reshape(-1)
+    # Define reasonable ranges for the pendulum:
+    # θ ∈ [-0.3 rad, 0.3 rad],  θdot ∈ [-1 rad/s, 1 rad/s]
+    x_bounds_low  = np.array([-0.3, -1.0])
+    x_bounds_high = np.array([ 0.3,  1.0])
 
-    print("\n--- Numeric linearized continuous-time system at (x̄,ū) ---")
-    print("x̄ =", x_bar_val)
-    print("ū =", u_bar_val)
-    print("A_num =\n", A_num)
-    print("B_num =\n", B_num)
-    print("c_num =\n", c_num)
+    # Torque input τ ∈ [-0.2 Nm, 0.2 Nm]
+    u_bounds_low  = np.array([-0.2])
+    u_bounds_high = np.array([ 0.2])
 
-    dt = 0.1  # example sampling time [s]
-    Ad, Bd, cd = discretize(A_num, B_num, c_num, dt)
+    x_bar_seq = [
+        rng.uniform(low=x_bounds_low, high=x_bounds_high)
+        for _ in range(N)
+    ]
 
-    print("\n--- Discretized affine system at (x̄,ū) ---")
-    print(f"dt = {dt}")
-    print("Ad =\n", Ad)
-    print("Bd =\n", Bd)
-    print("cd =\n", cd)
+    u_bar_seq = [
+        rng.uniform(low=u_bounds_low, high=u_bounds_high)
+        for _ in range(N)
+    ]
 
+    Ad_list, Bd_list, cd_list = [], [], []
 
+    t0 = time.perf_counter()
 
-    # # Build substitution dict: {x0: pi, x1: 0, u0: 0}
-    # subs_dict = {
-    #     x_sym[0]: x_star[0],   # x0 -> pi
-    #     x_sym[1]: x_star[1],   # x1 -> 0
-    #     u_sym[0]: u_star[0],   # u0 -> 0 (not used in A, but it's fine)
-    # }
- 
-    # A_at_star_sym = A_sym.subs(subs_dict)      # still a SymPy Matrix
-    # B_at_star_sym = B_sym.subs(subs_dict)
+    for k in range(N):
+        x_bar = x_bar_seq[k]
+        u_bar = u_bar_seq[k]
 
-    # # Convert to numpy arrays if needed
-    # A_at_star = np.array(A_at_star_sym, dtype=float)
-    # B_at_star = np.array(B_at_star_sym, dtype=float)    
+        # Pack arguments for A_fun, B_fun, c_fun
+        args = list(x_bar) + list(u_bar)
 
-    # print("Pendulum symbolic state x_sym:", x_sym)
-    # print("Pendulum symbolic input u_sym:", u_sym)
-    # print("Pendulum symbolic dynamics f_sym(x,u):", f_sym)
-   
+        # Fast numeric evaluation (no SymPy here)
+        A_k = np.array(A_fun(*args), dtype=float)
+        B_k = np.array(B_fun(*args), dtype=float)
+        c_k = np.array(c_fun(*args), dtype=float).reshape(-1)
 
-    # print("A(x*,u*) =")
-    # print(A_at_star)
-    # print("B(x*,u*) =")
-    # print(B_at_star)
+        Ad_k, Bd_k, cd_k = discretize_affine(A_k, B_k, c_k, dt)
 
+        Ad_list.append(Ad_k)
+        Bd_list.append(Bd_k)
+        cd_list.append(cd_k)
 
-    # # Rest of code can remain as is for now unconnected to the pendulum:
-    
-    # # Simple 2D double integrator:
-    # # x = [position, velocity]^T
-    # # x_{k+1} = A x_k + B u_k
-    # dt = 0.1
-    # A = np.array([
-    #     [1.0, dt],
-    #     [0.0, 1.0],
-    # ])
-    # B = np.array([
-    #     [0.5 * dt**2],
-    #     [dt],
-    # ])
+    # Build big LTV matrices
+    A_x = np.zeros((N * n, (N + 1) * n), dtype=float)
+    B_u = np.zeros((N * n, N * m), dtype=float)
+    d = np.zeros(N * n, dtype=float)
 
-    # nx = A.shape[0]
-    # nu = B.shape[1]
+    for k in range(N):
+        row_start = k * n
+        row_end = row_start + n
 
-    # Q = np.diag([1.0, 0.1])
-    # R = np.diag([0.01])
+        col_xk = k * n
+        col_xkp1 = (k + 1) * n
 
-    # N = 20
+        Ad_k = Ad_list[k]
+        Bd_k = Bd_list[k]
+        cd_k = cd_list[k]
 
-    # planner = OSQPMPCPlanner(A, B, Q, R, N, verbose=True)
+        A_x[row_start:row_end, col_xk:col_xk + n] = -Ad_k
+        A_x[row_start:row_end, col_xkp1:col_xkp1 + n] = np.eye(n)
 
-    # x0 = np.array([0.0, 0.0])
-    # x_goal = np.array([1.0, 0.0])
+        col_uk = k * m
+        B_u[row_start:row_end, col_uk:col_uk + m] = -Bd_k
 
-    # # Constant state reference over horizon
-    # x_ref = np.tile(x_goal.reshape(nx, 1), (1, N))
-    # u_ref = np.zeros((nu, N - 1))  # currently ignored, kept for symmetry
+        d[row_start:row_end] = cd_k
 
-    # u0, X_pred, U_pred = planner.solve(x0, x_ref, u_ref)
+    x_init = np.array([0.1, 0.0])
 
-    # print("u0 (first control) =", u0)
-    # print("X_pred shape:", X_pred.shape)
-    # print("U_pred shape:", U_pred.shape)
+    A_ic = np.zeros((n, (N + 1) * n + N * m), dtype=float)
+    b_ic = x_init.copy()
+    A_ic[:, 0:n] = np.eye(n)
+
+    A_eq_dyn = np.hstack([A_x, B_u])
+    b_eq_dyn = d
+
+    A_eq = np.vstack([A_ic, A_eq_dyn])
+    b_eq = np.concatenate([b_ic, b_eq_dyn])
+
+    t1 = time.perf_counter()
+    print(f"\nLTV dynamics assembly time: {(t1 - t0)*1e3:.3f} ms")
+
+    print("\n=== LTV dynamics assembly check ===")
+    print(f"State dim n = {n}, input dim m = {m}, horizon N = {N}")
+    print("Ad_k shape:", Ad_list[0].shape,
+          "Bd_k shape:", Bd_list[0].shape,
+          "cd_k shape:", cd_list[0].shape)
+    print("A_x shape:", A_x.shape)
+    print("B_u shape:", B_u.shape)
+    print("d shape:", d.shape)
+    print("A_eq shape:", A_eq.shape)
+    print("b_eq shape:", b_eq.shape)
 
 
 if __name__ == "__main__":
