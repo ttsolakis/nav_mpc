@@ -64,10 +64,10 @@ class SystemModel(ABC):
         raise NotImplementedError
 
     # Convenience accessors (handy later in qp_formulation)
-    def state_symbols(self) -> sp.Matrix:
+    def state_symbolic(self) -> sp.Matrix:
         return self.x_sym
 
-    def input_symbols(self) -> sp.Matrix:
+    def input_symbolic(self) -> sp.Matrix:
         return self.u_sym
 
     def dynamics_symbolic(self) -> sp.Matrix:
