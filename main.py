@@ -7,6 +7,7 @@ from scipy.linalg import expm
 from scipy import sparse
 
 from models.simple_pendulum_model import SimplePendulumModel
+from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints 
 from qp_formulation.qp_formulation import build_linearized_system
 
 
@@ -156,6 +157,34 @@ def main():
     # Convert to CSC for OSQP
     Aeq = Aeq.tocsc()
 
+    # ---------- System constraints ----------
+
+    # Instantiate constraints for this system
+    sys_constr = SimplePendulumSystemConstraints(system)
+    xmin, xmax, umin, umax = sys_constr.get_bounds()
+
+    # Decision variable: z = [x0,...,xN, u0,...,u_{N-1}]
+    Nz = (N + 1) * nx + N * nu
+
+    # Aineq z <= uineq, lineq <= Aineq z
+    # We take Aineq = I so bounds directly constrain z
+    Aineq = sparse.eye(Nz, format="csc")
+
+    # Repeat bounds across horizon
+    x_lower_all = np.kron(np.ones(N + 1), xmin)
+    x_upper_all = np.kron(np.ones(N + 1), xmax)
+    u_lower_all = np.kron(np.ones(N), umin)
+    u_upper_all = np.kron(np.ones(N), umax)
+
+    lineq = np.hstack([x_lower_all, u_lower_all])
+    uineq = np.hstack([x_upper_all, u_upper_all])
+
+    # ---------- Stack equalities + inequalities for OSQP ----------
+
+    A = sparse.vstack([Aeq, Aineq], format="csc")
+    l = np.hstack([leq, lineq])
+    u = np.hstack([ueq, uineq])
+
     t1 = time.perf_counter()
     print(f"\nLTV dynamics assembly time: {(t1 - t0)*1e3:.3f} ms")
 
@@ -166,6 +195,10 @@ def main():
           "cd_k shape:", cd_list[0].shape)
     print("Aeq shape:", Aeq.shape)
     print("leq shape:", leq.shape)
+    print("Aineq shape:", Aineq.shape)
+    print("A (full) shape:", A.shape)
+    print("l shape:", l.shape)
+    print("u shape:", u.shape)
 
 
 if __name__ == "__main__":
