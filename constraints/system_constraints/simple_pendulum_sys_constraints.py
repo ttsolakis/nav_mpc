@@ -26,6 +26,6 @@ class SimplePendulumSystemConstraints(SystemConstraints):
         self.x_max[:] = +np.inf
 
         # Input constraints
-        max_torque = 0.2  #Nm
+        max_torque = 100.0  #Nm
         self.u_min = -max_torque
         self.u_max = max_torque

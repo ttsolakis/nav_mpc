@@ -1,61 +1,45 @@
 # nav_mpc/objectives/objectives.py
 
 from abc import ABC, abstractmethod
+from typing import Tuple
+
 import numpy as np
-from nav_mpc.models.dynamics import SystemModel
-
-
 class Objective(ABC):
     """
-    Abstract base class for a quadratic *stage* cost ℓ(x, u).
-
-    The intended form is:
+    Base class for quadratic MPC objectives of the form
 
         ℓ(x, u) = (x - x_ref)^T Q (x - x_ref) + u^T R u
 
-    but this class only exposes the parameters (x_ref, Q, R).
-    The MPC/QP layer will decide:
-      - how many stages there are (horizon length),
-      - at which stages this cost is applied.
+    (and optionally a terminal cost with QN).
+
+    This class only stores Q, QN, R.
     """
 
-    def __init__(self, model: SystemModel) -> None:
-        self.model = model
-        self.state_dim = model.state_dim
-        self.input_dim = model.input_dim
+    def __init__(self, state_dim: int, input_dim: int) -> None:
+        self.state_dim = state_dim
+        self.input_dim = input_dim
+
+        # Default weights (child overrides in build_weights)
+        self.Q = np.eye(self.state_dim)
+        self.QN = np.eye(self.state_dim)
+        self.R = np.eye(self.input_dim)
+
+        self.build_weights()
+
+        # Basic sanity checks
+        self.Q = np.asarray(self.Q, dtype=float).reshape(self.state_dim, self.state_dim)
+        self.QN = np.asarray(self.QN, dtype=float).reshape(self.state_dim, self.state_dim)
+        self.R = np.asarray(self.R, dtype=float).reshape(self.input_dim, self.input_dim)
 
     @abstractmethod
-    def get_x_ref(self) -> np.ndarray:
+    def build_weights(self) -> None:
         """
-        Return the reference state x_ref for this stage.
-
-        Returns
-        -------
-        x_ref : np.ndarray
-            Reference state, shape (state_dim,).
+        Child must set self.Q, self.QN, self.R (numpy arrays with correct shapes).
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def get_Q(self) -> np.ndarray:
+    def get_weights(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Return the state cost matrix Q for this stage.
-
-        Returns
-        -------
-        Q : np.ndarray
-            State cost matrix, shape (state_dim, state_dim).
+        Return (Q, QN, R).
         """
-        raise NotImplementedError
-
-    @abstractmethod
-    def get_R(self) -> np.ndarray:
-        """
-        Return the input cost matrix R for this stage.
-
-        Returns
-        -------
-        R : np.ndarray
-            Input cost matrix, shape (input_dim, input_dim).
-        """
-        raise NotImplementedError
+        return self.Q, self.QN, self.R

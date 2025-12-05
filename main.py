@@ -1,204 +1,160 @@
 # nav_mpc/main.py
 
+import numpy as np
+import osqp
 import time
 
-import numpy as np
-from scipy.linalg import expm
-from scipy import sparse
-
 from models.simple_pendulum_model import SimplePendulumModel
+from objectives.simple_pendulum_objective import SimplePendulumObjective
 from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints 
 from qp_formulation.qp_formulation import build_linearized_system
+from simulation.simulator import ContinuousSimulator, SimulatorConfig
+from planner.planner import assemble_ltv_mpc_qp
 
-
-def discretize_affine(A: np.ndarray,
-                      B: np.ndarray,
-                      c: np.ndarray,
-                      dt: float):
-    """
-    x_dot = A x + B u + c  →  x_{k+1} = Ad x_k + Bd u_k + cd
-    using block-matrix exponential.
-    """
-    A = np.asarray(A, dtype=float)
-    B = np.asarray(B, dtype=float)
-    c = np.asarray(c, dtype=float).reshape(-1)
-
-    n = A.shape[0]
-    m = B.shape[1]
-
-    M = np.zeros((n + m + 1, n + m + 1), dtype=float)
-    M[:n, :n] = A
-    M[:n, n:n + m] = B
-    M[:n, n + m] = c
-    M[n + m, n + m] = 1.0
-
-    Md = expm(M * dt)
-
-    Ad = Md[:n, :n]
-    Bd = Md[:n, n:n + m]
-    cd = Md[:n, n + m]
-
-    return Ad, Bd, cd
+from simulation.plotting.plotter import plot_state_input_trajectories
+from simulation.animation.simple_pendulum_animation import animate_pendulum
 
 
 def main():
-    # 1) System
-    system = SimplePendulumModel()
-    n = system.state_dim
-    m = system.input_dim
+    # -----------------------------------
+    # ---------- Problem Setup ----------
+    # -----------------------------------
 
-    # 2) Symbolic linearization + lambdified callables
-    (A_fun, B_fun, c_fun) = build_linearized_system(system)
+    # System, objective, constraints
+    system      = SimplePendulumModel()
+    objective   = SimplePendulumObjective(system)
+    constraints = SimplePendulumSystemConstraints(system)
+    
+    # Initial and reference states
+    x_init = np.array([np.pi-0.1, 0.0])
+    x_ref  = np.array([np.pi, 0.0])
 
-    N = 20
+    # Horizon and sampling time
+    N  = 40
     dt = 0.01
 
-    # Fake a sequence of operating points (x̄_k, ū_k)
-    rng = np.random.default_rng(seed=42)   # <--- important: reproducible tests
+    # Simulation parameters
+    nsim    = 500
+    sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=1)
+    sim     = ContinuousSimulator(system, sim_cfg)
 
-    # Define reasonable ranges for the pendulum:
-    # θ ∈ [-0.3 rad, 0.3 rad],  θdot ∈ [-1 rad/s, 1 rad/s]
-    x_bounds_low  = np.array([-0.3, -1.0])
-    x_bounds_high = np.array([ 0.3,  1.0])
+    # -----------------------------------
+    # ---------- QP Formulation ---------
+    # -----------------------------------
 
-    # Torque input τ ∈ [-0.2 Nm, 0.2 Nm]
-    u_bounds_low  = np.array([-0.2])
-    u_bounds_high = np.array([ 0.2])
+    # Symbolic linearization + lambdified callables
+    A_fun, B_fun, c_fun = build_linearized_system(system)
 
-    x_bar_seq = [
-        rng.uniform(low=x_bounds_low, high=x_bounds_high)
-        for _ in range(N)
-    ]
+    # Initial linearization points: all zeros
+    x_bar_seq = np.zeros((N + 1, system.state_dim))
+    u_bar_seq = np.zeros((N, system.input_dim))
 
-    u_bar_seq = [
-        rng.uniform(low=u_bounds_low, high=u_bounds_high)
-        for _ in range(N)
-    ]
+    # Assemble initial QP
+    P, q, A, l, u = assemble_ltv_mpc_qp(system, A_fun, B_fun, c_fun, objective, constraints, N, dt, x_init, x_ref, x_bar_seq, u_bar_seq)
 
-    Ad_list, Bd_list, cd_list = [], [], []
+    # Initialize OSQP
+    prob = osqp.OSQP()
+    prob.setup(P, q, A, l, u, warm_starting=True)
 
-    t0 = time.perf_counter()
+    # -----------------------------------
+    # ------------ Main Loop ------------
+    # -----------------------------------
 
-    for k in range(N):
-        x_bar = x_bar_seq[k]
-        u_bar = u_bar_seq[k]
+    x = x_init.copy()
 
-        # Pack arguments for A_fun, B_fun, c_fun
-        args = list(x_bar) + list(u_bar)
+    # store trajectories (lists first)
+    x_traj = [x.copy()]   # include initial state
+    u_traj = []           # nsim control inputs
 
-        # Fast numeric evaluation (no SymPy here)
-        A_k = np.array(A_fun(*args), dtype=float)
-        B_k = np.array(B_fun(*args), dtype=float)
-        c_k = np.array(c_fun(*args), dtype=float).reshape(-1)
+    total_opt_time = 0.0
+    total_sim_time = 0.0
+    total_assembly_time = 0.0
+    total_setup_time = 0.0
+    
+    for i in range(nsim):
 
-        Ad_k, Bd_k, cd_k = discretize_affine(A_k, B_k, c_k, dt)
+        start_opt_time = time.perf_counter()
 
-        Ad_list.append(Ad_k)
-        Bd_list.append(Bd_k)
-        cd_list.append(cd_k)
+        # 1) Solve current QP
+        res = prob.solve()
+        if res.info.status != "solved":
+            raise ValueError(f"OSQP did not solve the problem at step {i}! Status: {res.info.status}")
 
-    nx, nu = n, m
+        z = res.x
 
-    # Decision variable:
-    #   z = [x0, x1, ..., xN, u0, ..., u_{N-1}]
-    Nz = (N + 1) * nx + N * nu
+        # 2) Extract predicted state and input trajectories
+        X_flat = z[0:(N + 1) * system.state_dim]
+        U_flat = z[(N + 1) * system.state_dim:]
+        X = X_flat.reshape(N + 1, system.state_dim)
+        U = U_flat.reshape(N, system.input_dim)
 
-    # Equality constraints:
-    #  - nx rows for initial condition x0 = x_init
-    #  - N*nx rows for dynamics x_{k+1} - Ad_k x_k - Bd_k u_k = cd_k
-    n_eq = (N + 1) * nx
+        end_opt_time = time.perf_counter()
+        opt_time = (end_opt_time - start_opt_time)*1e3  # ms
 
-    Aeq = sparse.lil_matrix((n_eq, Nz), dtype=float)
-    leq = np.zeros(n_eq, dtype=float)
-    ueq = np.zeros(n_eq, dtype=float)
+        start_sim_time = time.perf_counter()
 
-    # ---- 1) Initial condition: x0 = x_init ----
-    x_init = np.array([0.1, 0.0])   # same as before
+        # 3) Simulate closed-loop step and store trajectories
+        u0 = U[0]
+        x  = sim.step(x, u0)
+        x_traj.append(x.copy())
+        u_traj.append(u0.copy())
+        print(f"Step {i}: x = {x}, u0 = {u0}")
 
-    # Row block 0..nx-1 acts only on x0
-    Aeq[0:nx, 0:nx] = sparse.eye(nx)
-    leq[0:nx] = x_init
-    ueq[0:nx] = x_init
+        end_sim_time = time.perf_counter()
+        sim_time = (end_sim_time - start_sim_time)*1e3  # ms
+  
+        start_assembly_time = time.perf_counter()
+        # 5) Rebuild the QP around new (x̄, ū)
+        x_init    = x.copy()
+        x_bar_seq = X
+        u_bar_seq = U
+        P, q, A, l, u = assemble_ltv_mpc_qp(system, A_fun, B_fun, c_fun, objective, constraints, N, dt, x_init, x_ref, x_bar_seq, u_bar_seq)
 
-    # ---- 2) Dynamics: for k = 0,...,N-1 ----
-    #    x_{k+1} - Ad_k x_k - Bd_k u_k = cd_k
-    # →  [ ... -Ad_k ... I ... -Bd_k ... ] z = cd_k
-    for k in range(N):
-        row_start = (k + 1) * nx
-        row_end   = row_start + nx
+        end_assembly_time = time.perf_counter()
+        assembly_time = (end_assembly_time - start_assembly_time)*1e3  # ms
 
-        # State block columns
-        col_xk_start   = k * nx
-        col_xk_end     = col_xk_start + nx
-        col_xkp1_start = (k + 1) * nx
-        col_xkp1_end   = col_xkp1_start + nx
+        # For now: re-create OSQP each step (simple & correct).
+        # Later you can optimize this with prob.update() and fixed sparsity.
+        start_setup_time = time.perf_counter()
 
-        # Input block columns (after all states)
-        col_uk_start = (N + 1) * nx + k * nu
-        col_uk_end   = col_uk_start + nu
+        prob = osqp.OSQP()
+        prob.setup(P, q, A, l, u, warm_starting=True)
 
-        Ad_k = Ad_list[k]
-        Bd_k = Bd_list[k]
-        cd_k = cd_list[k]
+        end_setup_time = time.perf_counter()
+        setup_time = (end_setup_time - start_setup_time)*1e3  # ms
 
-        # -Ad_k on x_k
-        Aeq[row_start:row_end, col_xk_start:col_xk_end] = -Ad_k
+        total_opt_time += opt_time
+        total_sim_time += sim_time
+        total_assembly_time += assembly_time
+        total_setup_time += setup_time
 
-        # +I on x_{k+1}
-        Aeq[row_start:row_end, col_xkp1_start:col_xkp1_end] = sparse.eye(nx)
+        
+    avg_opt_time = total_opt_time / nsim
+    avg_sim_time = total_sim_time / nsim
+    avg_assembly_time = total_assembly_time / nsim
+    avg_setup_time = total_setup_time / nsim
 
-        # -Bd_k on u_k
-        Aeq[row_start:row_end, col_uk_start:col_uk_end] = -Bd_k
+    print(f"\nAverage optimization time: {avg_opt_time:.3f} ms")
+    print(f"Average simulation time:     {avg_sim_time:.3f} ms")
+    print(f"Average QP assembly time:    {avg_assembly_time:.3f} ms")
+    print(f"Average QP setup time:     {avg_setup_time:.3f} ms")
 
-        # RHS: cd_k
-        leq[row_start:row_end] = cd_k
-        ueq[row_start:row_end] = cd_k
+    # ----------------------------------------
+    # ------------ Plot & Animate ------------
+    # ---------------------------------------- 
+    # Prepare results for plotting and animation
+    x_traj = np.vstack(x_traj)       # shape (nsim+1, nx)
+    u_traj = np.vstack(u_traj)       # shape (nsim,   nu)
+    total_time = dt * np.arange(x_traj.shape[0])  # length nsim+1
 
-    # Convert to CSC for OSQP
-    Aeq = Aeq.tocsc()
+    # Plot state and input trajectories (generic)
+    plot_state_input_trajectories(system, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
 
-    # ---------- System constraints ----------
+    # For the pendulum, torque bounds are in SimplePendulumSystemConstraints
+    _, _, umin, umax = constraints.get_bounds()
+    umax_scalar = float(np.max(np.abs(umax)))
 
-    # Instantiate constraints for this system
-    sys_constr = SimplePendulumSystemConstraints(system)
-    xmin, xmax, umin, umax = sys_constr.get_bounds()
-
-    # Decision variable: z = [x0,...,xN, u0,...,u_{N-1}]
-    Nz = (N + 1) * nx + N * nu
-
-    # Aineq z <= uineq, lineq <= Aineq z
-    # We take Aineq = I so bounds directly constrain z
-    Aineq = sparse.eye(Nz, format="csc")
-
-    # Repeat bounds across horizon
-    x_lower_all = np.kron(np.ones(N + 1), xmin)
-    x_upper_all = np.kron(np.ones(N + 1), xmax)
-    u_lower_all = np.kron(np.ones(N), umin)
-    u_upper_all = np.kron(np.ones(N), umax)
-
-    lineq = np.hstack([x_lower_all, u_lower_all])
-    uineq = np.hstack([x_upper_all, u_upper_all])
-
-    # ---------- Stack equalities + inequalities for OSQP ----------
-
-    A = sparse.vstack([Aeq, Aineq], format="csc")
-    l = np.hstack([leq, lineq])
-    u = np.hstack([ueq, uineq])
-
-    t1 = time.perf_counter()
-    print(f"\nLTV dynamics assembly time: {(t1 - t0)*1e3:.3f} ms")
-
-    print("\n=== LTV dynamics assembly check ===")
-    print(f"State dim n = {n}, input dim m = {m}, horizon N = {N}")
-    print("Ad_k shape:", Ad_list[0].shape,
-          "Bd_k shape:", Bd_list[0].shape,
-          "cd_k shape:", cd_list[0].shape)
-    print("Aeq shape:", Aeq.shape)
-    print("leq shape:", leq.shape)
-    print("Aineq shape:", Aineq.shape)
-    print("A (full) shape:", A.shape)
-    print("l shape:", l.shape)
-    print("u shape:", u.shape)
+    animate_pendulum(system, total_time, x_traj, u_traj, umax=umax_scalar, show=False)
 
 
 if __name__ == "__main__":

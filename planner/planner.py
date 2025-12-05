@@ -1,189 +1,203 @@
 # nav_mpc/planner/planner.py
 
+from typing import Tuple
+
 import numpy as np
-import scipy.sparse as sp
-import osqp
+from scipy import sparse
+from scipy.linalg import expm
+
+from models.dynamics import SystemModel
+from objectives.objectives import Objective
+from constraints.constraints import SystemConstraints
 
 
-class OSQPMPCPlanner:
+def discretize_affine(A: np.ndarray,
+                      B: np.ndarray,
+                      c: np.ndarray,
+                      dt: float):
     """
-    Minimal OSQP-based MPC planner for LTI systems.
-
-    System:
-        x_{k+1} = A x_k + B u_k
-
-    Cost:
-        sum_{k=0}^{N-1} (x_k - x_ref)^T Q (x_k - x_ref)
-        + (x_N - x_ref)^T Q (x_N - x_ref)
-        + sum_{k=0}^{N-1} u_k^T R u_k
-
-    For now:
-      - fixed A, B, Q, R, horizon N
-      - no explicit state/input bounds (only dynamics constraints)
-      - x_ref is taken as constant over the horizon (first column of x_ref)
+    x_dot = A x + B u + c  →  x_{k+1} = Ad x_k + Bd u_k + cd
+    using block-matrix exponential.
     """
+    A = np.asarray(A, dtype=float)
+    B = np.asarray(B, dtype=float)
+    c = np.asarray(c, dtype=float).reshape(-1)
 
-    def __init__(
-        self,
-        A: np.ndarray,
-        B: np.ndarray,
-        Q: np.ndarray,
-        R: np.ndarray,
-        N: int,
-        verbose: bool = False,
-    ) -> None:
-        A = np.asarray(A, dtype=float)
-        B = np.asarray(B, dtype=float)
-        Q = np.asarray(Q, dtype=float)
-        R = np.asarray(R, dtype=float)
+    n = A.shape[0]
+    m = B.shape[1]
 
-        nx, nx2 = A.shape
-        assert nx == nx2, f"A must be square, got {A.shape}"
-        nx3, nu = B.shape
-        assert nx3 == nx, f"A and B must have same number of rows, got {A.shape}, {B.shape}"
-        assert Q.shape == (nx, nx), f"Q must have shape ({nx}, {nx}), got {Q.shape}"
-        assert R.shape == (nu, nu), f"R must have shape ({nu, nu}), got {R.shape}"
+    M = np.zeros((n + m + 1, n + m + 1), dtype=float)
+    M[:n, :n] = A
+    M[:n, n:n + m] = B
+    M[:n, n + m] = c
+    M[n + m, n + m] = 1.0
 
-        self.A = A
-        self.B = B
-        self.Q = Q
-        self.R = R
-        self.nx = nx
-        self.nu = nu
-        self.N = int(N)
+    Md = expm(M * dt)
 
-        # ---------- QP structure (P, A) ----------
+    Ad = Md[:n, :n]
+    Bd = Md[:n, n:n + m]
+    cd = Md[:n, n + m]
 
-        nx = self.nx
-        nu = self.nu
-        N = self.N
+    return Ad, Bd, cd
 
-        # Cost matrix P: block-diag(Q,...,Q,QN,R,...,R)
-        QN = Q
-        P = sp.block_diag(
-            [
-                sp.kron(sp.eye(N), Q),  # x_0..x_{N-1}
-                QN,                     # x_N
-                sp.kron(sp.eye(N), R),  # u_0..u_{N-1}
-            ],
-            format="csc",
-        )
-        self.P = P
 
-        # Placeholder q for setup (we update it in solve)
-        q0 = np.zeros(P.shape[0])
+def assemble_ltv_mpc_qp(
+    system: SystemModel,
+    A_fun,
+    B_fun,
+    c_fun,
+    objective: Objective,
+    constraints: SystemConstraints,
+    N: int,
+    dt: float,
+    x_init: np.ndarray,
+    x_ref: np.ndarray,
+    x_bar_seq: np.ndarray,
+    u_bar_seq: np.ndarray,
+) -> Tuple[sparse.csc_matrix, np.ndarray, sparse.csc_matrix, np.ndarray, np.ndarray]:
+    """
+    Build (P, q, A, l, u) for the LTV MPC QP with decision variable
 
-        # ---------- Dynamics constraints ----------
-        # x_{k+1} = A x_k + B u_k
-        Ad = sp.csc_matrix(A)
-        Bd = sp.csc_matrix(B)
+        z = [x0, x1, ..., xN, u0, ..., u_{N-1}]  ∈ R^{(N+1)nx + N nu}.
 
-        Ax = sp.kron(sp.eye(N + 1), -sp.eye(nx)) + sp.kron(
-            sp.eye(N + 1, k=-1), Ad
-        )
-        Bu = sp.kron(
-            sp.vstack([sp.csc_matrix((1, N)), sp.eye(N)]),
-            Bd,
-        )
-        Aeq = sp.hstack([Ax, Bu], format="csc")
+    The linearization is done around the provided (x_bar_seq, u_bar_seq).
 
-        # No inequality constraints yet -> A = Aeq
-        A = Aeq
-        self.A_mat = A
+    Parameters
+    ----------
+    system : SystemModel
+    A_fun, B_fun, c_fun : callables
+        Lambdified continuous-time linearization from qp_formulation.build_linearized_system.
+    objective : Objective
+        Provides Q, QN, R.
+    constraints : SystemConstraints
+        Provides simple box bounds on x and u.
+    N : int
+        Horizon length.
+    dt : float
+        Discretization step.
+    x_init : np.ndarray, shape (nx,)
+        Initial state for this QP.
+    x_ref : np.ndarray, shape (nx,)
+        Reference state used in the cost.
+    x_bar_seq : array-like, shape (N+1, nx)
+        Linearization points for the state (only first N used for dynamics).
+    u_bar_seq : array-like, shape (N, nu)
+        Linearization points for the input.
 
-        # Equality bounds l = u = beq
-        leq = np.zeros((N + 1) * nx)
-        ueq = np.zeros((N + 1) * nx)
-        self.l = leq.copy()
-        self.u = ueq.copy()
+    Returns
+    -------
+    P : csc_matrix
+    q : np.ndarray
+    A : csc_matrix
+    l : np.ndarray
+    u : np.ndarray
+    """
+    n = system.state_dim
+    m = system.input_dim
+    nx, nu = n, m
 
-        # ---------- OSQP problem ----------
-        self.prob = osqp.OSQP()
-        self.prob.setup(
-            P=P,
-            q=q0,
-            A=A,
-            l=self.l,
-            u=self.u,
-            verbose=verbose,
-            warm_start=True,
-        )
+    x_bar_seq = np.asarray(x_bar_seq, dtype=float)
+    u_bar_seq = np.asarray(u_bar_seq, dtype=float)
+    x_init = np.asarray(x_init, dtype=float).reshape(nx)
+    x_ref  = np.asarray(x_ref,  dtype=float).reshape(nx)
 
-    def solve(
-        self,
-        x0: np.ndarray,
-        x_ref: np.ndarray | None = None,
-        u_ref: np.ndarray | None = None,
-    ):
-        """
-        Solve the MPC problem for the given initial state and references.
+    # ----------------------------
+    # 1) Discretize along horizon
+    # ----------------------------
+    Ad_list, Bd_list, cd_list = [], [], []
+    for k in range(N):
+        x_bar = x_bar_seq[k]
+        u_bar = u_bar_seq[k]
 
-        Parameters
-        ----------
-        x0 : np.ndarray
-            Initial state, shape (nx,).
-        x_ref : np.ndarray, optional
-            State reference trajectory, shape (nx, N).
-            Currently only the first column is used (constant ref).
-        u_ref : np.ndarray, optional
-            Not used yet (kept for API compatibility).
+        args = list(x_bar) + list(u_bar)
 
-        Returns
-        -------
-        u0 : np.ndarray
-            First control action, shape (nu,).
-        X_pred : np.ndarray
-            Predicted state trajectory, shape (N+1, nx).
-        U_pred : np.ndarray
-            Predicted input trajectory, shape (N, nu).
-        """
-        nx = self.nx
-        nu = self.nu
-        N = self.N
+        A_k = np.array(A_fun(*args), dtype=float)
+        B_k = np.array(B_fun(*args), dtype=float)
+        c_k = np.array(c_fun(*args), dtype=float).reshape(-1)
 
-        x0 = np.asarray(x0, dtype=float).reshape(-1)
-        assert x0.size == nx, f"x0 must have size {nx}, got {x0.size}"
+        Ad_k, Bd_k, cd_k = discretize_affine(A_k, B_k, c_k, dt)
 
-        # ---- build q from reference ----
-        if x_ref is None:
-            x_ref_vec = np.zeros(nx)
-        else:
-            x_ref = np.asarray(x_ref, dtype=float)
-            assert x_ref.shape == (nx, N), (
-                f"x_ref must have shape ({nx}, {N}), got {x_ref.shape}"
-            )
-            x_ref_vec = x_ref[:, 0]
+        Ad_list.append(Ad_k)
+        Bd_list.append(Bd_k)
+        cd_list.append(cd_k)
 
-        Q = self.Q
-        QN = self.Q
-        q_x = np.kron(np.ones(N), -Q @ x_ref_vec)
-        q_xN = -QN @ x_ref_vec
-        q_u = np.zeros(N * nu)
-        q = np.hstack([q_x, q_xN, q_u])
+    # ----------------------------
+    # 2) Equality constraints
+    # ----------------------------
+    Nz = (N + 1) * nx + N * nu
+    n_eq = (N + 1) * nx
 
-        # ---- initial state constraint: l[:nx] = u[:nx] = -x0 ----
-        l = self.l.copy()
-        u = self.u.copy()
-        l[:nx] = -x0
-        u[:nx] = -x0
+    Aeq = sparse.lil_matrix((n_eq, Nz), dtype=float)
+    leq = np.zeros(n_eq, dtype=float)
+    ueq = np.zeros(n_eq, dtype=float)
 
-        # ---- update OSQP and solve ----
-        self.prob.update(q=q, l=l, u=u)
-        res = self.prob.solve()
+    # Initial condition x0 = x_init
+    Aeq[0:nx, 0:nx] = sparse.eye(nx)
+    leq[0:nx] = x_init
+    ueq[0:nx] = x_init
 
-        if res.info.status_val not in (1,):  # 1 = solved
-            raise RuntimeError(f"OSQP did not solve the problem: {res.info.status}")
+    # Dynamics:
+    #   x_{k+1} - Ad_k x_k - Bd_k u_k = cd_k
+    for k in range(N):
+        row_start = (k + 1) * nx
+        row_end   = row_start + nx
 
-        z = res.x
+        col_xk_start   = k * nx
+        col_xk_end     = col_xk_start + nx
+        col_xkp1_start = (k + 1) * nx
+        col_xkp1_end   = col_xkp1_start + nx
+        col_uk_start   = (N + 1) * nx + k * nu
+        col_uk_end     = col_uk_start + nu
 
-        # ---- extract trajectories ----
-        x_block_size = (N + 1) * nx
-        x_flat = z[:x_block_size]
-        u_flat = z[x_block_size:]
+        Ad_k = Ad_list[k]
+        Bd_k = Bd_list[k]
+        cd_k = cd_list[k]
 
-        X_pred = x_flat.reshape(N + 1, nx)
-        U_pred = u_flat.reshape(N, nu)
+        Aeq[row_start:row_end, col_xk_start:col_xk_end] = -Ad_k
+        Aeq[row_start:row_end, col_xkp1_start:col_xkp1_end] = sparse.eye(nx)
+        Aeq[row_start:row_end, col_uk_start:col_uk_end] = -Bd_k
 
-        u0 = U_pred[0]
+        leq[row_start:row_end] = cd_k
+        ueq[row_start:row_end] = cd_k
 
-        return u0, X_pred, U_pred
+    Aeq = Aeq.tocsc()
+
+    # ----------------------------
+    # 3) Box constraints
+    # ----------------------------
+    xmin, xmax, umin, umax = constraints.get_bounds()
+
+    Aineq = sparse.eye(Nz, format="csc")
+
+    x_lower_all = np.kron(np.ones(N + 1), xmin)
+    x_upper_all = np.kron(np.ones(N + 1), xmax)
+    u_lower_all = np.kron(np.ones(N), umin)
+    u_upper_all = np.kron(np.ones(N), umax)
+
+    lineq = np.hstack([x_lower_all, u_lower_all])
+    uineq = np.hstack([x_upper_all, u_upper_all])
+
+    # Stack equalities + inequalities
+    A = sparse.vstack([Aeq, Aineq], format="csc")
+    l = np.hstack([leq, lineq])
+    u = np.hstack([ueq, uineq])
+
+    # ----------------------------
+    # 4) Objective P, q
+    # ----------------------------
+    Q, QN, R = objective.get_weights()
+
+    Q_block = sparse.kron(sparse.eye(N), sparse.csc_matrix(Q))
+    QN_block = sparse.csc_matrix(QN)
+    R_block = sparse.kron(sparse.eye(N), sparse.csc_matrix(R))
+
+    P = sparse.block_diag([Q_block, QN_block, R_block], format="csc")
+
+    q_x = np.hstack([
+        np.kron(np.ones(N), -Q @ x_ref),
+        -QN @ x_ref
+    ])
+    q_u = np.zeros(N * nu)
+    q = np.hstack([q_x, q_u])
+
+    return P, q, A, l, u
