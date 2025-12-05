@@ -4,6 +4,7 @@ import time
 
 import numpy as np
 from scipy.linalg import expm
+from scipy import sparse
 
 from models.simple_pendulum_model import SimplePendulumModel
 from qp_formulation.qp_formulation import build_linearized_system
@@ -95,41 +96,65 @@ def main():
         Bd_list.append(Bd_k)
         cd_list.append(cd_k)
 
-    # Build big LTV matrices
-    A_x = np.zeros((N * n, (N + 1) * n), dtype=float)
-    B_u = np.zeros((N * n, N * m), dtype=float)
-    d = np.zeros(N * n, dtype=float)
+    nx, nu = n, m
 
+    # Decision variable:
+    #   z = [x0, x1, ..., xN, u0, ..., u_{N-1}]
+    Nz = (N + 1) * nx + N * nu
+
+    # Equality constraints:
+    #  - nx rows for initial condition x0 = x_init
+    #  - N*nx rows for dynamics x_{k+1} - Ad_k x_k - Bd_k u_k = cd_k
+    n_eq = (N + 1) * nx
+
+    Aeq = sparse.lil_matrix((n_eq, Nz), dtype=float)
+    leq = np.zeros(n_eq, dtype=float)
+    ueq = np.zeros(n_eq, dtype=float)
+
+    # ---- 1) Initial condition: x0 = x_init ----
+    x_init = np.array([0.1, 0.0])   # same as before
+
+    # Row block 0..nx-1 acts only on x0
+    Aeq[0:nx, 0:nx] = sparse.eye(nx)
+    leq[0:nx] = x_init
+    ueq[0:nx] = x_init
+
+    # ---- 2) Dynamics: for k = 0,...,N-1 ----
+    #    x_{k+1} - Ad_k x_k - Bd_k u_k = cd_k
+    # →  [ ... -Ad_k ... I ... -Bd_k ... ] z = cd_k
     for k in range(N):
-        row_start = k * n
-        row_end = row_start + n
+        row_start = (k + 1) * nx
+        row_end   = row_start + nx
 
-        col_xk = k * n
-        col_xkp1 = (k + 1) * n
+        # State block columns
+        col_xk_start   = k * nx
+        col_xk_end     = col_xk_start + nx
+        col_xkp1_start = (k + 1) * nx
+        col_xkp1_end   = col_xkp1_start + nx
+
+        # Input block columns (after all states)
+        col_uk_start = (N + 1) * nx + k * nu
+        col_uk_end   = col_uk_start + nu
 
         Ad_k = Ad_list[k]
         Bd_k = Bd_list[k]
         cd_k = cd_list[k]
 
-        A_x[row_start:row_end, col_xk:col_xk + n] = -Ad_k
-        A_x[row_start:row_end, col_xkp1:col_xkp1 + n] = np.eye(n)
+        # -Ad_k on x_k
+        Aeq[row_start:row_end, col_xk_start:col_xk_end] = -Ad_k
 
-        col_uk = k * m
-        B_u[row_start:row_end, col_uk:col_uk + m] = -Bd_k
+        # +I on x_{k+1}
+        Aeq[row_start:row_end, col_xkp1_start:col_xkp1_end] = sparse.eye(nx)
 
-        d[row_start:row_end] = cd_k
+        # -Bd_k on u_k
+        Aeq[row_start:row_end, col_uk_start:col_uk_end] = -Bd_k
 
-    x_init = np.array([0.1, 0.0])
+        # RHS: cd_k
+        leq[row_start:row_end] = cd_k
+        ueq[row_start:row_end] = cd_k
 
-    A_ic = np.zeros((n, (N + 1) * n + N * m), dtype=float)
-    b_ic = x_init.copy()
-    A_ic[:, 0:n] = np.eye(n)
-
-    A_eq_dyn = np.hstack([A_x, B_u])
-    b_eq_dyn = d
-
-    A_eq = np.vstack([A_ic, A_eq_dyn])
-    b_eq = np.concatenate([b_ic, b_eq_dyn])
+    # Convert to CSC for OSQP
+    Aeq = Aeq.tocsc()
 
     t1 = time.perf_counter()
     print(f"\nLTV dynamics assembly time: {(t1 - t0)*1e3:.3f} ms")
@@ -139,11 +164,8 @@ def main():
     print("Ad_k shape:", Ad_list[0].shape,
           "Bd_k shape:", Bd_list[0].shape,
           "cd_k shape:", cd_list[0].shape)
-    print("A_x shape:", A_x.shape)
-    print("B_u shape:", B_u.shape)
-    print("d shape:", d.shape)
-    print("A_eq shape:", A_eq.shape)
-    print("b_eq shape:", b_eq.shape)
+    print("Aeq shape:", Aeq.shape)
+    print("leq shape:", leq.shape)
 
 
 if __name__ == "__main__":
