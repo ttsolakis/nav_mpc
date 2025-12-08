@@ -5,11 +5,12 @@ from scipy import sparse
 import osqp
 import time
 
+from utils.system_info import print_system_info
+
 from models.simple_pendulum_model import SimplePendulumModel
 from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints
 from objectives.simple_pendulum_objective import SimplePendulumObjective
 from qp_formulation.qp_formulation import build_linear_constraints, build_quadratic_objective
-
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 from simulation.animation.simple_pendulum_animation import animate_pendulum
@@ -64,9 +65,6 @@ def main():
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=1)
     sim     = ContinuousSimulator(system, sim_cfg)
 
-
-    print(f"Problem size: N = {N}, nx = {system.state_dim}, nu = {system.input_dim}, nc TODO add number of constraints")
-
     # -----------------------------------
     # ---------- QP Formulation ---------
     # -----------------------------------
@@ -105,8 +103,14 @@ def main():
     u_traj = []           # nsim control inputs
 
     total_opt_time = 0.0
+    min_opt_time = float("inf")
+    max_opt_time = 0.0
     total_sim_time = 0.0
+    min_sim_time = float("inf")
+    max_sim_time = 0.0
     total_eQP_time = 0.0
+    min_eQP_time = float("inf")
+    max_eQP_time = 0.0
 
     for i in range(nsim):
 
@@ -166,10 +170,18 @@ def main():
         # 4) Accumulate timers for profiling
         opt_time = (end_opt_time - start_opt_time) * 1e3  # ms
         total_opt_time += opt_time
+        min_opt_time = min(min_opt_time, opt_time)
+        max_opt_time = max(max_opt_time, opt_time)
+
         sim_time = (end_sim_time - start_sim_time) * 1e3  # ms
         total_sim_time += sim_time
+        min_sim_time = min(min_sim_time, sim_time)
+        max_sim_time = max(max_sim_time, sim_time)
+
         eQP_time = (end_eQP_time - start_eQP_time) * 1e3  # ms
         total_eQP_time += eQP_time
+        min_eQP_time = min(min_eQP_time, eQP_time)
+        max_eQP_time = max(max_eQP_time, eQP_time)
 
         print(f"Step {i}: x = {x}, u0 = {u0}", "optimization time: ", {opt_time}, "simulation time: ", {sim_time}, "QP evaluation time: ", {eQP_time})
 
@@ -178,9 +190,15 @@ def main():
     avg_eQP_time = total_eQP_time / nsim
 
 
-    print(f"\nAverage optimization time: {avg_opt_time:.3f} ms")
-    print(f"Average simulation time:     {avg_sim_time:.3f} ms")
-    print(f"Average QP evaluation time:  {avg_eQP_time:.3f} ms")
+    print("\n=== Timing statistics over MPC loop ===")
+    print(f"Problem size: N = {N}, nx = {system.state_dim}, nu = {system.input_dim}, nc TODO add number of constraints")
+    print(f"Optimization time:   avg = {avg_opt_time:.3f} ms, "
+          f"min = {min_opt_time:.3f} ms, max = {max_opt_time:.3f} ms")
+    print(f"Simulation time:     avg = {avg_sim_time:.3f} ms, "
+          f"min = {min_sim_time:.3f} ms, max = {max_sim_time:.3f} ms")
+    print(f"QP evaluation time:  avg = {avg_eQP_time:.3f} ms, "
+          f"min = {min_eQP_time:.3f} ms, max = {max_eQP_time:.3f} ms")
+    print_system_info()
 
     # # ----------------------------------------
     # # ------------ Plot & Animate ------------
