@@ -1,45 +1,43 @@
 # nav_mpc/objectives/objectives.py
 
 from abc import ABC, abstractmethod
-from typing import Tuple
+import sympy as sp
+from models.dynamics import SystemModel
 
-import numpy as np
 class Objective(ABC):
     """
-    Base class for quadratic MPC objectives of the form
+    Abstract base class for MPC stage cost definitions in symbolic form.
 
-        ℓ(x, u) = (x - x_ref)^T Q (x - x_ref) + u^T R u
-
-    (and optionally a terminal cost with QN).
-
-    This class only stores Q, QN, R.
+    Each concrete objective:
+      - has access to system.state_symbolic(), system.input_symbolic()
+      - defines symbolic error maps e_x(x - x_ref), e_u(u - u_ref)
+      - stores numeric Q, QN, R, x_ref, u_ref for later use.
     """
 
-    def __init__(self, state_dim: int, input_dim: int) -> None:
-        self.state_dim = state_dim
-        self.input_dim = input_dim
+    def __init__(self, system: SystemModel) -> None:
+        self.system = system
 
-        # Default weights (child overrides in build_weights)
-        self.Q = np.eye(self.state_dim)
-        self.QN = np.eye(self.state_dim)
-        self.R = np.eye(self.input_dim)
-
-        self.build_weights()
-
-        # Basic sanity checks
-        self.Q = np.asarray(self.Q, dtype=float).reshape(self.state_dim, self.state_dim)
-        self.QN = np.asarray(self.QN, dtype=float).reshape(self.state_dim, self.state_dim)
-        self.R = np.asarray(self.R, dtype=float).reshape(self.input_dim, self.input_dim)
+        # Use the same symbols as the system (so everything is consistent)
+        self.x_sym = system.state_symbolic()   # (nx, 1)
+        self.u_sym = system.input_symbolic()   # (nu, 1)
 
     @abstractmethod
-    def build_weights(self) -> None:
+    def build_state_error(self) -> sp.Matrix:
         """
-        Child must set self.Q, self.QN, self.R (numpy arrays with correct shapes).
+        Return e_x(x - x_ref) as a sympy column vector (nx, 1) or (n_ex, 1).
         """
         raise NotImplementedError
 
-    def get_weights(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    @abstractmethod
+    def build_input_error(self) -> sp.Matrix:
         """
-        Return (Q, QN, R).
+        Return e_u(u - u_ref) as a sympy column vector (nu, 1) or (n_eu, 1).
         """
-        return self.Q, self.QN, self.R
+        raise NotImplementedError
+
+    # Convenience accessors (like dynamics_symbolic / constraints_symbolic)
+    def state_error_symbolic(self) -> sp.Matrix:
+        return self.build_state_error()
+
+    def input_error_symbolic(self) -> sp.Matrix:
+        return self.build_input_error()

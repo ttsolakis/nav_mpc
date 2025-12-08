@@ -8,7 +8,7 @@ from scipy.linalg import expm
 
 from models.dynamics import SystemModel
 from objectives.objectives import Objective
-from constraints.constraints import SystemConstraints
+from constraints.sys_constraints import SystemConstraints
 
 
 def discretize_affine(A: np.ndarray,

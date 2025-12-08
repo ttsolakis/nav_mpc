@@ -1,34 +1,51 @@
 # nav_mpc/objectives/simple_pendulum_objective.py
 
 import numpy as np
-
-from objectives.objectives import Objective
+import sympy as sp
 from models.dynamics import SystemModel
+from objectives.objectives import Objective
 
 
 class SimplePendulumObjective(Objective):
     """
-    Quadratic MPC objective for the SimplePendulumModel:
+    Simple quadratic objective for the pendulum:
 
-        ℓ(x, u) = (x - x_ref)^T Q (x - x_ref) + u^T R u
+      J = 0.5 * e_x^T Q  e_x  + 0.5 * e_u^T R e_u
 
-    with tunable diagonal weights.
+    with e_x(x) = x - x_ref, e_u(u) = u - u_ref.
     """
 
     def __init__(self, system: SystemModel) -> None:
-        self.system = system
-        self._q_theta = 100.0
-        self._q_theta_dot = 1.0
-        self._r_torque = 0.1
+        super().__init__(system)
 
-        super().__init__(system.state_dim, system.input_dim)
+        # LQR-like weights
+        self.Q  = np.diag([10.0, 1.0])   # stage state cost
+        self.QN = np.diag([10.0, 1.0])   # terminal state cost
+        self.R  = np.diag([0.1])         # stage input cost
 
-    def build_weights(self) -> None:
-        # State weights: Q = diag(q_theta, q_theta_dot)
-        self.Q = np.diag([self._q_theta, self._q_theta_dot])
+        # Reference: upright (pi, 0), zero torque
+        self.x_ref = np.array([np.pi, 0.0])
+        self.u_ref = np.array([0.0])
 
-        # Terminal weight: for now, same as stage cost
-        self.QN = self.Q.copy()
+    def build_state_error(self) -> sp.Matrix:
+        """
+        e_x(x - x_ref) = x - x_ref.
 
-        # Input weight R (scalar for single input)
-        self.R = np.array([[self._r_torque]], dtype=float)
+        Here x is symbolic, x_ref is numeric; we convert x_ref to a
+        sympy constant vector so the whole expression is symbolic.
+        """
+        x = self.x_sym                         # sympy column (2, 1)
+        x_ref_sym = sp.Matrix(self.x_ref)      # converts numpy -> sympy column
+
+        e_x = x - x_ref_sym                    # still a sympy Matrix
+        return e_x
+
+    def build_input_error(self) -> sp.Matrix:
+        """
+        e_u(u - u_ref) = u - u_ref.
+        """
+        u = self.u_sym
+        u_ref_sym = sp.Matrix(self.u_ref)      # sympy column (1, 1)
+
+        e_u = u - u_ref_sym
+        return e_u
