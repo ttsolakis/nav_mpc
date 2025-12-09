@@ -15,6 +15,54 @@ from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 from simulation.animation.simple_pendulum_animation import animate_pendulum
 
+def shift_state_sequence(X: np.ndarray) -> np.ndarray:
+    """
+    Given previous optimal state sequence X of shape (N+1, nx),
+    build a shifted linearization sequence X_bar of shape (N+1, nx):
+
+        X_bar[k]   = X[k+1]          for k = 0..N-1   (shift forward)
+        X_bar[N]   = 2*X[N] - X[N-1] (linear extrapolation for the last one)
+
+    This implements:
+        p̄_{t|k} = p_{t-1|k+1}, k = 0..N-1
+        p̄_{t|N} = 2 p_{t-1|N} - p_{t-1|N-1}
+    """
+    X = np.asarray(X)
+    X_bar = np.empty_like(X)
+
+    # shift all but last
+    X_bar[:-1, :] = X[1:, :]
+
+    # extrapolate terminal
+    X_bar[-1, :] = 2.0 * X[-1, :] - X[-2, :]
+
+    return X_bar
+
+
+def shift_input_sequence(U: np.ndarray) -> np.ndarray:
+    """
+    Given previous optimal input sequence U of shape (N, nu),
+    build shifted U_bar of shape (N, nu).
+
+    Natural choice:
+        U_bar[k]     = U[k+1]     for k = 0..N-2
+        U_bar[N-1]   = U[N-1]     (hold last input)
+
+    You *could* also extrapolate the last one if you want.
+    """
+    U = np.asarray(U)
+    U_bar = np.empty_like(U)
+
+    if U.shape[0] == 0:
+        return U  # degenerate case
+
+    # shift all but last
+    U_bar[:-1, :] = U[1:, :]
+
+    # keep last input
+    U_bar[-1, :] = U[-1, :]
+
+    return U_bar
 
 def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: int) -> list:
     """
@@ -46,6 +94,9 @@ def main():
     # -----------------------------------
     # ---------- Problem Setup ----------
     # -----------------------------------
+
+    # Enable profiling
+    profiling = True
 
     # System, objective, constraints
     system      = SimplePendulumModel()
@@ -79,6 +130,10 @@ def main():
 
     # Pack args for the callables in the correct order
     args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
+
+    # Problem dimensions
+    nx = system.state_dim
+    nu = system.input_dim
 
     # Evaluate QP data once (initial)
     A = np.array(A_fun(*args), dtype=float)
@@ -114,26 +169,20 @@ def main():
 
     for i in range(nsim):
 
-        # 1) Solve current QP
+        # 1) Solve current QP and extract optimal trajectories
         start_opt_time = time.perf_counter()
 
         res = prob.solve()
         if res.info.status != "solved":
-            raise ValueError(
-                f"OSQP did not solve the problem at step {i}! Status: {res.info.status}"
-            )
+            raise ValueError(f"OSQP did not solve the problem at step {i}! Status: {res.info.status}")
 
         z = res.x
-
-        end_opt_time = time.perf_counter()
-
-        nx = system.state_dim
-        nu = system.input_dim
-
         X_flat = z[0:(N + 1) * nx]
         U_flat = z[(N + 1) * nx:]
         X = X_flat.reshape(N + 1, nx)
         U = U_flat.reshape(N,     nu)
+
+        end_opt_time = time.perf_counter()
 
         # 2) Simulate closed-loop step and store trajectories
         start_sim_time = time.perf_counter()
@@ -145,17 +194,12 @@ def main():
 
         end_sim_time = time.perf_counter()
         
-
-        # 3) Evaluate QP around new (x̄, ū)
+        # 3) Evaluate QP around new (x0, x̄, ū)
         start_eQP_time = time.perf_counter()
 
         x_init = x.copy()
-        x_bar_seq = X.copy()
-        u_bar_seq = U.copy()
-        # TODO: Shift previous trajectory one step forward for linearization: 
-        # p̄_{t|k} = p_{t-1|k+1} for k = 0..N-1 # p̄_{t|N} = 2*p_{t-1|N} - p_{t-1|N-1} 
-        # where p̄_{t|:} is the linearization sequence and p_{t-1|:} is the previous optimal sequence of either x or u depends on use. x_bar_seq = X u_bar_seq = U
-
+        x_bar_seq = shift_state_sequence(X)   # shape (N+1, nx)
+        u_bar_seq = shift_input_sequence(U)   # shape (N,   nu)
         args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
         A_new = np.array(A_fun(*args), dtype=float)
         A_new = sparse.csc_matrix(A_new)
@@ -168,37 +212,34 @@ def main():
         end_eQP_time = time.perf_counter()
         
         # 4) Accumulate timers for profiling
-        opt_time = (end_opt_time - start_opt_time) * 1e3  # ms
-        total_opt_time += opt_time
-        min_opt_time = min(min_opt_time, opt_time)
-        max_opt_time = max(max_opt_time, opt_time)
+        if profiling:
+            opt_time = (end_opt_time - start_opt_time) * 1e3  # ms
+            total_opt_time += opt_time
+            min_opt_time = min(min_opt_time, opt_time)
+            max_opt_time = max(max_opt_time, opt_time)
 
-        sim_time = (end_sim_time - start_sim_time) * 1e3  # ms
-        total_sim_time += sim_time
-        min_sim_time = min(min_sim_time, sim_time)
-        max_sim_time = max(max_sim_time, sim_time)
+            sim_time = (end_sim_time - start_sim_time) * 1e3  # ms
+            total_sim_time += sim_time
+            min_sim_time = min(min_sim_time, sim_time)
+            max_sim_time = max(max_sim_time, sim_time)
 
-        eQP_time = (end_eQP_time - start_eQP_time) * 1e3  # ms
-        total_eQP_time += eQP_time
-        min_eQP_time = min(min_eQP_time, eQP_time)
-        max_eQP_time = max(max_eQP_time, eQP_time)
-
-        print(f"Step {i}: x = {x}, u0 = {u0}", "optimization time: ", {opt_time}, "simulation time: ", {sim_time}, "QP evaluation time: ", {eQP_time})
-
-    avg_opt_time        = total_opt_time / nsim
-    avg_sim_time        = total_sim_time / nsim
-    avg_eQP_time = total_eQP_time / nsim
+            eQP_time = (end_eQP_time - start_eQP_time) * 1e3  # ms
+            total_eQP_time += eQP_time
+            min_eQP_time = min(min_eQP_time, eQP_time)
+            max_eQP_time = max(max_eQP_time, eQP_time)
+            print(f"Step {i}: x = {x}, u0 = {u0}", "optimization time: ", {opt_time}, "simulation time: ", {sim_time}, "QP evaluation time: ", {eQP_time})
 
 
-    print("\n=== Timing statistics over MPC loop ===")
-    print(f"Problem size: N = {N}, nx = {system.state_dim}, nu = {system.input_dim}, nc TODO add number of constraints")
-    print(f"Optimization time:   avg = {avg_opt_time:.3f} ms, "
-          f"min = {min_opt_time:.3f} ms, max = {max_opt_time:.3f} ms")
-    print(f"Simulation time:     avg = {avg_sim_time:.3f} ms, "
-          f"min = {min_sim_time:.3f} ms, max = {max_sim_time:.3f} ms")
-    print(f"QP evaluation time:  avg = {avg_eQP_time:.3f} ms, "
-          f"min = {min_eQP_time:.3f} ms, max = {max_eQP_time:.3f} ms")
-    print_system_info()
+    if profiling:
+        avg_opt_time = total_opt_time / nsim
+        avg_sim_time = total_sim_time / nsim
+        avg_eQP_time = total_eQP_time / nsim
+        print("\n=== Timing statistics over MPC loop ===")
+        print(f"Problem size: N = {N}, nx = {system.state_dim}, nu = {system.input_dim}, nc TODO add number of constraints")
+        print(f"Optimization time:   avg = {avg_opt_time:.3f} ms, "f"min = {min_opt_time:.3f} ms, max = {max_opt_time:.3f} ms")
+        print(f"Simulation time:     avg = {avg_sim_time:.3f} ms, "f"min = {min_sim_time:.3f} ms, max = {max_sim_time:.3f} ms")
+        print(f"QP evaluation time:  avg = {avg_eQP_time:.3f} ms, "f"min = {min_eQP_time:.3f} ms, max = {max_eQP_time:.3f} ms")
+        print_system_info()
 
     # # ----------------------------------------
     # # ------------ Plot & Animate ------------
