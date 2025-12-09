@@ -73,6 +73,37 @@ def pack_args(
     return args
 
 
+def set_qp(
+    x0: np.ndarray,
+    X_bar: np.ndarray,
+    U_bar: np.ndarray,
+    N: int,
+    A_fun,
+    l_fun,
+    u_fun,
+    P_fun,
+    q_fun,
+):
+    """
+    Build full QP matrices (P, q, A, l, u) for a given (x0, X̄, Ū).
+
+    This is used for the first OSQP setup, and can also be reused
+    inside update_qp if you want to avoid duplicated code.
+    """
+    args = pack_args(x0, X_bar, U_bar, N)
+
+    A = np.array(A_fun(*args), dtype=float)
+    A = sparse.csc_matrix(A)
+
+    l = np.array(l_fun(*args), dtype=float).reshape(-1)
+    u = np.array(u_fun(*args), dtype=float).reshape(-1)
+
+    P = P_fun(*args)             # assumed sparse.csc_matrix already
+    q = q_fun(*args).reshape(-1)
+
+    return P, q, A, l, u
+
+
 def update_qp(
     prob,
     x: np.ndarray,

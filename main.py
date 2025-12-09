@@ -6,7 +6,7 @@ import osqp
 import time
 
 # Import MPC2QP functionality, timing and plotting utilities (generic stuff)
-from mpc2qp import build_linear_constraints, build_quadratic_objective, update_qp, pack_args, extract_solution
+from mpc2qp import build_linear_constraints, build_quadratic_objective, set_qp, update_qp, extract_solution
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
@@ -25,6 +25,7 @@ def main():
     # Enable debugging & profiling
     debugging = False
     profiling = True
+    printing_per_step = False
     show_system_info = True
     
     # System, objective, constraints
@@ -49,48 +50,54 @@ def main():
     # ---------- QP Formulation ---------
     # -----------------------------------
 
-    # Initialize timing stats
-    timing_stats = init_timing_stats()
-
-    # Problem dimensions
-    nx = system.state_dim
-    nu = system.input_dim
-    nc = constraints.constraints_dim
-
-    # Symbolic linearization + lambdified callables
     print("Building QP...")
+
     A_fun, l_fun, u_fun = build_linear_constraints(system, constraints, N, dt, debug=False)
     P_fun, q_fun        = build_quadratic_objective(system, objective, N, debug=False)
 
-    # Evaluate QP data once (initial)
-    print("Setting up OSQP problem...")
-    x_bar_seq = np.zeros((N + 1, nx))
-    u_bar_seq = np.zeros((N,     nu))
-    args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
-    A = np.array(A_fun(*args), dtype=float)
-    A = sparse.csc_matrix(A)
-    l = np.array(l_fun(*args), dtype=float).reshape(-1)
-    u = np.array(u_fun(*args), dtype=float).reshape(-1)
-    P = P_fun(*args)             # sparse.csc_matrix
-    q = q_fun(*args).reshape(-1)
-    prob = osqp.OSQP()
-    prob.setup(P, q, A, l, u, warm_starting=True, verbose=False)
 
     # -----------------------------------
     # ------------ Main Loop ------------
     # -----------------------------------
 
+    print("Initializations...")
+
+    # Initialize timing stats
+    timing_stats = init_timing_stats()
+
+    # Problem dimension
+    nx = system.state_dim
+    nu = system.input_dim
+    nc = constraints.constraints_dim
+
     # Initial state
     x = x_init.copy()
 
+    # Initialize nominal trajectories
+    x_bar_seq = np.zeros((N + 1, nx))
+    u_bar_seq = np.zeros((N,     nu))
+
     # Store trajectories for plotting / animation
     x_traj = [x.copy()]   
-    u_traj = []         
+    u_traj = [] 
+
+    # Initialize OSQP solver
+    prob = osqp.OSQP()
+    P, q, A, l, u, = set_qp(x, x_bar_seq, u_bar_seq, N, A_fun, l_fun, u_fun, P_fun, q_fun)
+    prob.setup(P, q, A, l, u, warm_starting=True, verbose=False)        
 
     print("Running main loop...")
     for i in range(nsim):
 
-        # 1) Solve current QP and extract solution
+        # 1) Evaluate QP around new (x0, x̄, ū)
+        start_eQP_time = time.perf_counter()
+
+        if i > 0:
+            update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun)
+
+        end_eQP_time = time.perf_counter()
+
+        # 2) Solve current QP and extract solution
         start_opt_time = time.perf_counter()
 
         res = prob.solve()
@@ -99,7 +106,7 @@ def main():
 
         end_opt_time = time.perf_counter()
 
-        # 2) Simulate closed-loop step and store trajectories
+        # 3) Simulate closed-loop step and store trajectories
         start_sim_time = time.perf_counter()
 
         u0 = U[0]
@@ -108,13 +115,6 @@ def main():
         u_traj.append(u0.copy())
 
         end_sim_time = time.perf_counter()
-        
-        # 3) Evaluate QP around new (x0, x̄, ū)
-        start_eQP_time = time.perf_counter()
-
-        update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun)
-
-        end_eQP_time = time.perf_counter()
 
         # 4) Per-step prints
         if debugging:
@@ -122,15 +122,15 @@ def main():
             print(f"Step {i}: x = {x}, u0 = {u0}")
         
         # 5) Profiling updates
-        if profiling:
-            update_timing_stats(timing_stats, start_opt_time, end_opt_time, start_sim_time, end_sim_time, start_eQP_time, end_eQP_time)
+        if profiling and i > 0:
+            update_timing_stats(printing=print_timing_summary, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
 
     if profiling:
         print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, show_system_info=show_system_info)
 
-    # # ----------------------------------------
-    # # ------------ Plot & Animate ------------
-    # # ---------------------------------------- 
+    # ----------------------------------------
+    # ------------ Plot & Animate ------------
+    # ---------------------------------------- 
 
     print("Plotting and saving...")
     x_traj = np.vstack(x_traj)       # (nsim+1, nx)
