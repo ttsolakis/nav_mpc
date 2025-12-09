@@ -125,8 +125,6 @@ def main():
         if profiling:
             update_timing_stats(timing_stats, start_opt_time, end_opt_time, start_sim_time, end_sim_time, start_eQP_time, end_eQP_time)
 
-    print("Main loop complete.")
-
     if profiling:
         print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, show_system_info=show_system_info)
 
@@ -135,19 +133,15 @@ def main():
     # # ---------------------------------------- 
 
     print("Plotting and saving...")
-    x_traj = np.vstack(x_traj)       # shape (nsim+1, nx)
-    u_traj = np.vstack(u_traj)       # shape (nsim,   nu)
+    x_traj = np.vstack(x_traj)       # (nsim+1, nx)
+    u_traj = np.vstack(u_traj)       # (nsim,   nu)
     total_time = dt * np.arange(x_traj.shape[0])  # length nsim+1
 
-    # Plot state and input trajectories (generic)
-    plot_state_input_trajectories(system, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
+    # Plot state and input trajectories (generic, uses constraints internally)
+    plot_state_input_trajectories(system, constraints, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
 
     print("Animating and saving...")
-    # For the pendulum, torque bounds are in SimplePendulumSystemConstraints
-    _, _, umin, umax = constraints.get_bounds()
-    umax_scalar = float(np.max(np.abs(umax)))
-
-    animate_pendulum(system, total_time, x_traj, u_traj, umax=umax_scalar, show=False, save_gif=True)
+    animate_pendulum(system, constraints, total_time, x_traj, u_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()

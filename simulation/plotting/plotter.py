@@ -9,12 +9,15 @@ from models.dynamics import SystemModel
 
 def plot_state_input_trajectories(
     system: SystemModel,
+    constraints: object | None,
     t: np.ndarray,
     x_traj: np.ndarray,
     u_traj: np.ndarray,
     x_ref: np.ndarray | None = None,
     save_path: str | Path | None = None,
     show: bool = False,
+    x_bounds: tuple[np.ndarray, np.ndarray] | None = None,
+    u_bounds: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> None:
     """
     Generic plotting for state and input trajectories.
@@ -22,7 +25,11 @@ def plot_state_input_trajectories(
     Parameters
     ----------
     system : SystemModel
-        Provides state_dim and input_dim.
+        Provides state_dim and input_dim (and optionally bounds).
+    constraints : object or None
+        If not None and has method get_bounds(), it should return
+        (x_min, x_max, u_min, u_max). These are used as default
+        state/input bounds unless x_bounds/u_bounds are explicitly given.
     t : (T,)
         Time stamps for state trajectory x_traj.
         Inputs are assumed defined on intervals [t_k, t_{k+1}),
@@ -41,6 +48,12 @@ def plot_state_input_trajectories(
         with the same filenames.
     show : bool
         Whether to show the figures with plt.show().
+    x_bounds : (x_min, x_max), optional
+        Each is (nx,) array. Overrides bounds from `constraints`/`system`
+        if provided.
+    u_bounds : (u_min, u_max), optional
+        Each is (nu,) array. Overrides bounds from `constraints`/`system`
+        if provided.
     """
     nx = system.state_dim
     nu = system.input_dim
@@ -52,9 +65,33 @@ def plot_state_input_trajectories(
     assert x_traj.shape[0] == t.shape[0], "x_traj and t must have same length"
     assert u_traj.shape[0] == t.shape[0] - 1, "u_traj must have length len(t)-1"
 
-    # Determine results directory
+    # ------------ Resolve bounds from constraints/system ------------
+    # 1) constraints.get_bounds() if available
+    if (x_bounds is None or u_bounds is None) and constraints is not None:
+        if hasattr(constraints, "get_bounds"):
+            bounds = constraints.get_bounds()
+            if len(bounds) == 4:
+                x_min_c, x_max_c, u_min_c, u_max_c = map(np.asarray, bounds)
+                if x_bounds is None:
+                    x_bounds = (x_min_c, x_max_c)
+                if u_bounds is None:
+                    u_bounds = (u_min_c, u_max_c)
+
+    # 2) fall back to system attributes if still None
+    if x_bounds is None:
+        x_min = getattr(system, "x_min", None) or getattr(system, "xmin", None)
+        x_max = getattr(system, "x_max", None) or getattr(system, "xmax", None)
+        if x_min is not None and x_max is not None:
+            x_bounds = (np.asarray(x_min), np.asarray(x_max))
+
+    if u_bounds is None:
+        u_min = getattr(system, "u_min", None) or getattr(system, "umin", None)
+        u_max = getattr(system, "u_max", None) or getattr(system, "umax", None)
+        if u_min is not None and u_max is not None:
+            u_bounds = (np.asarray(u_min), np.asarray(u_max))
+
+    # ------------ Determine results directory ------------
     if save_path is None:
-        # plotter.py is nav_mpc/simulation/plotting/plotter.py
         project_root = Path(__file__).resolve().parents[2]
         results_dir = project_root / "results"
     else:
@@ -62,7 +99,6 @@ def plot_state_input_trajectories(
         if save_path.is_dir():
             results_dir = save_path
         else:
-            # if a file path is passed, use its parent directory
             results_dir = save_path.parent
 
     results_dir.mkdir(exist_ok=True)
@@ -72,20 +108,52 @@ def plot_state_input_trajectories(
     # =========================
     fig_x, axes_x = plt.subplots(nx, 1, figsize=(8, 2.5 * nx), sharex=True)
     if nx == 1:
-        axes_x = [axes_x]  # make it iterable
+        axes_x = [axes_x]
 
     fig_x.suptitle("State trajectories")
 
     for i in range(nx):
         ax = axes_x[i]
-        ax.plot(t, x_traj[:, i], label=f"x{i}")
+
+        # state trajectory with subscript
+        ax.plot(t, x_traj[:, i], label=fr"$x_{i}$")
+
+        # reference (if provided) with ref subscript
         if x_ref is not None:
-            ax.axhline(x_ref[i], linestyle="--", alpha=0.5, label="x_ref")
-        ax.set_ylabel(f"x{i}")
+            ax.axhline(
+                x_ref[i],
+                linestyle="--",
+                alpha=0.7,
+                label=fr"$x_{{\mathrm{{ref}},\,{i}}}$",
+            )
+
+        # state bounds (if provided and finite)
+        if x_bounds is not None:
+            x_min_i = x_bounds[0][i]
+            x_max_i = x_bounds[1][i]
+
+            if np.isfinite(x_min_i):
+                ax.axhline(
+                    x_min_i,
+                    linestyle="--",
+                    linewidth=1.5,
+                    color="k",
+                    alpha=0.3,
+                )
+            if np.isfinite(x_max_i):
+                ax.axhline(
+                    x_max_i,
+                    linestyle="--",
+                    linewidth=1.5,
+                    color="k",
+                    alpha=0.3,
+                )
+
+        ax.set_ylabel(fr"$x_{i}$")
         ax.grid(True)
         ax.legend(loc="best")
 
-    axes_x[-1].set_xlabel("Time [s]")
+    axes_x[-1].set_xlabel(r"Time $t$ [s]")
 
     fig_x.tight_layout(rect=[0, 0.03, 1, 0.95])
 
@@ -106,12 +174,36 @@ def plot_state_input_trajectories(
 
     for j in range(nu):
         ax = axes_u[j]
-        ax.step(t_u, u_traj[:, j], where="post", label=f"u{j}")
-        ax.set_ylabel(f"u{j}")
+
+        ax.step(t_u, u_traj[:, j], where="post", label=fr"$u_{j}$")
+
+        # input bounds (if provided and finite)
+        if u_bounds is not None:
+            u_min_j = u_bounds[0][j]
+            u_max_j = u_bounds[1][j]
+
+            if np.isfinite(u_min_j):
+                ax.axhline(
+                    u_min_j,
+                    linestyle="--",
+                    linewidth=1.5,
+                    color="k",
+                    alpha=0.3,
+                )
+            if np.isfinite(u_max_j):
+                ax.axhline(
+                    u_max_j,
+                    linestyle="--",
+                    linewidth=1.5,
+                    color="k",
+                    alpha=0.3,
+                )
+
+        ax.set_ylabel(fr"$u_{j}$")
         ax.grid(True)
         ax.legend(loc="best")
 
-    axes_u[-1].set_xlabel("Time [s]")
+    axes_u[-1].set_xlabel(r"Time $t$ [s]")
 
     fig_u.tight_layout(rect=[0, 0.03, 1, 0.95])
 
