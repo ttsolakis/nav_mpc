@@ -1,203 +1,116 @@
-# nav_mpc/planner/planner.py
-
-from typing import Tuple
+# nav_mpc/planner.py
 
 import numpy as np
 from scipy import sparse
-from scipy.linalg import expm
-
-from models.dynamics import SystemModel
-from objectives.objectives import Objective
-from constraints.sys_constraints import SystemConstraints
 
 
-def discretize_affine(A: np.ndarray,
-                      B: np.ndarray,
-                      c: np.ndarray,
-                      dt: float):
+def shift_state_sequence(X: np.ndarray) -> np.ndarray:
     """
-    x_dot = A x + B u + c  →  x_{k+1} = Ad x_k + Bd u_k + cd
-    using block-matrix exponential.
+    Given previous optimal state sequence X of shape (N+1, nx),
+    build a shifted linearization sequence X_bar of shape (N+1, nx):
+
+        X_bar[k]   = X[k+1]          for k = 0..N-1   (shift forward)
+        X_bar[N]   = 2*X[N] - X[N-1] (linear extrapolation for the last one)
     """
-    A = np.asarray(A, dtype=float)
-    B = np.asarray(B, dtype=float)
-    c = np.asarray(c, dtype=float).reshape(-1)
+    X = np.asarray(X)
+    X_bar = np.empty_like(X)
 
-    n = A.shape[0]
-    m = B.shape[1]
+    # shift all but last
+    X_bar[:-1, :] = X[1:, :]
 
-    M = np.zeros((n + m + 1, n + m + 1), dtype=float)
-    M[:n, :n] = A
-    M[:n, n:n + m] = B
-    M[:n, n + m] = c
-    M[n + m, n + m] = 1.0
+    # extrapolate terminal
+    X_bar[-1, :] = 2.0 * X[-1, :] - X[-2, :]
 
-    Md = expm(M * dt)
-
-    Ad = Md[:n, :n]
-    Bd = Md[:n, n:n + m]
-    cd = Md[:n, n + m]
-
-    return Ad, Bd, cd
+    return X_bar
 
 
-def assemble_ltv_mpc_qp(
-    system: SystemModel,
-    A_fun,
-    B_fun,
-    c_fun,
-    objective: Objective,
-    constraints: SystemConstraints,
+def shift_input_sequence(U: np.ndarray) -> np.ndarray:
+    """
+    Given previous optimal input sequence U of shape (N, nu),
+    build shifted U_bar of shape (N, nu):
+
+        U_bar[k]   = U[k+1]   for k = 0..N-2
+        U_bar[N-1] = U[N-1]   (hold last input)
+    """
+    U = np.asarray(U)
+    U_bar = np.empty_like(U)
+
+    if U.shape[0] == 0:
+        return U  # degenerate case
+
+    # shift all but last
+    U_bar[:-1, :] = U[1:, :]
+
+    # keep last input
+    U_bar[-1, :] = U[-1, :]
+
+    return U_bar
+
+
+def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: int) -> list:
+    """
+    Build argument list in the SAME order as used in build_linear_*:
+
+      [x0_0,...,x0_{nx-1},
+       xbar0_0,...,xbar0_{nx-1}, ubar0_0,...,ubar0_{nu-1},
+       ...,
+       xbar{N-1}_0,...,xbar{N-1}_{nx-1}, ubar{N-1}_0,...,ubar{N-1}_{nu-1}]
+    """
+    nx = x0.shape[0]
+    nu = u_bar_seq.shape[1] if N > 0 else 0
+
+    args = []
+
+    # x0
+    args.extend(np.asarray(x0).reshape(nx))
+
+    # stages 0..N-1
+    for k in range(N):
+        args.extend(np.asarray(x_bar_seq[k]).reshape(nx))
+        args.extend(np.asarray(u_bar_seq[k]).reshape(nu))
+
+    return args
+
+
+def evaluate_and_update_qp(
+    prob,
+    x: np.ndarray,
+    X: np.ndarray,
+    U: np.ndarray,
     N: int,
-    dt: float,
-    x_init: np.ndarray,
-    x_ref: np.ndarray,
-    x_bar_seq: np.ndarray,
-    u_bar_seq: np.ndarray,
-) -> Tuple[sparse.csc_matrix, np.ndarray, sparse.csc_matrix, np.ndarray, np.ndarray]:
+    A_fun,
+    l_fun,
+    u_fun,
+    P_fun,
+    q_fun,
+):
     """
-    Build (P, q, A, l, u) for the LTV MPC QP with decision variable
-
-        z = [x0, x1, ..., xN, u0, ..., u_{N-1}]  ∈ R^{(N+1)nx + N nu}.
-
-    The linearization is done around the provided (x_bar_seq, u_bar_seq).
-
-    Parameters
-    ----------
-    system : SystemModel
-    A_fun, B_fun, c_fun : callables
-        Lambdified continuous-time linearization from qp_formulation.build_linearized_system.
-    objective : Objective
-        Provides Q, QN, R.
-    constraints : SystemConstraints
-        Provides simple box bounds on x and u.
-    N : int
-        Horizon length.
-    dt : float
-        Discretization step.
-    x_init : np.ndarray, shape (nx,)
-        Initial state for this QP.
-    x_ref : np.ndarray, shape (nx,)
-        Reference state used in the cost.
-    x_bar_seq : array-like, shape (N+1, nx)
-        Linearization points for the state (only first N used for dynamics).
-    u_bar_seq : array-like, shape (N, nu)
-        Linearization points for the input.
-
-    Returns
-    -------
-    P : csc_matrix
-    q : np.ndarray
-    A : csc_matrix
-    l : np.ndarray
-    u : np.ndarray
+    Use the previous optimal sequences (X, U) and the current state x
+    to build new linearization points (x̄, ū), re-evaluate QP data,
+    and update the OSQP problem in-place.
     """
-    n = system.state_dim
-    m = system.input_dim
-    nx, nu = n, m
 
-    x_bar_seq = np.asarray(x_bar_seq, dtype=float)
-    u_bar_seq = np.asarray(u_bar_seq, dtype=float)
-    x_init = np.asarray(x_init, dtype=float).reshape(nx)
-    x_ref  = np.asarray(x_ref,  dtype=float).reshape(nx)
+    # 1) Build new initial condition + shifted linearization sequences
+    x_init = x.copy()
+    x_bar_seq = shift_state_sequence(X)   # shape (N+1, nx)
+    u_bar_seq = shift_input_sequence(U)   # shape (N,   U.shape[1])
 
-    # ----------------------------
-    # 1) Discretize along horizon
-    # ----------------------------
-    Ad_list, Bd_list, cd_list = [], [], []
-    for k in range(N):
-        x_bar = x_bar_seq[k]
-        u_bar = u_bar_seq[k]
+    # 2) Pack args in correct order
+    args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
 
-        args = list(x_bar) + list(u_bar)
+    # 3) Re-evaluate QP matrices/vectors
+    A_new = np.array(A_fun(*args), dtype=float)
+    A_new = sparse.csc_matrix(A_new)
+    l_new = np.array(l_fun(*args), dtype=float).reshape(-1)
+    u_new = np.array(u_fun(*args), dtype=float).reshape(-1)
+    P_new = P_fun(*args)             # sparse.csc_matrix
+    q_new = q_fun(*args).reshape(-1)
 
-        A_k = np.array(A_fun(*args), dtype=float)
-        B_k = np.array(B_fun(*args), dtype=float)
-        c_k = np.array(c_fun(*args), dtype=float).reshape(-1)
-
-        Ad_k, Bd_k, cd_k = discretize_affine(A_k, B_k, c_k, dt)
-
-        Ad_list.append(Ad_k)
-        Bd_list.append(Bd_k)
-        cd_list.append(cd_k)
-
-    # ----------------------------
-    # 2) Equality constraints
-    # ----------------------------
-    Nz = (N + 1) * nx + N * nu
-    n_eq = (N + 1) * nx
-
-    Aeq = sparse.lil_matrix((n_eq, Nz), dtype=float)
-    leq = np.zeros(n_eq, dtype=float)
-    ueq = np.zeros(n_eq, dtype=float)
-
-    # Initial condition x0 = x_init
-    Aeq[0:nx, 0:nx] = sparse.eye(nx)
-    leq[0:nx] = x_init
-    ueq[0:nx] = x_init
-
-    # Dynamics:
-    #   x_{k+1} - Ad_k x_k - Bd_k u_k = cd_k
-    for k in range(N):
-        row_start = (k + 1) * nx
-        row_end   = row_start + nx
-
-        col_xk_start   = k * nx
-        col_xk_end     = col_xk_start + nx
-        col_xkp1_start = (k + 1) * nx
-        col_xkp1_end   = col_xkp1_start + nx
-        col_uk_start   = (N + 1) * nx + k * nu
-        col_uk_end     = col_uk_start + nu
-
-        Ad_k = Ad_list[k]
-        Bd_k = Bd_list[k]
-        cd_k = cd_list[k]
-
-        Aeq[row_start:row_end, col_xk_start:col_xk_end] = -Ad_k
-        Aeq[row_start:row_end, col_xkp1_start:col_xkp1_end] = sparse.eye(nx)
-        Aeq[row_start:row_end, col_uk_start:col_uk_end] = -Bd_k
-
-        leq[row_start:row_end] = cd_k
-        ueq[row_start:row_end] = cd_k
-
-    Aeq = Aeq.tocsc()
-
-    # ----------------------------
-    # 3) Box constraints
-    # ----------------------------
-    xmin, xmax, umin, umax = constraints.get_bounds()
-
-    Aineq = sparse.eye(Nz, format="csc")
-
-    x_lower_all = np.kron(np.ones(N + 1), xmin)
-    x_upper_all = np.kron(np.ones(N + 1), xmax)
-    u_lower_all = np.kron(np.ones(N), umin)
-    u_upper_all = np.kron(np.ones(N), umax)
-
-    lineq = np.hstack([x_lower_all, u_lower_all])
-    uineq = np.hstack([x_upper_all, u_upper_all])
-
-    # Stack equalities + inequalities
-    A = sparse.vstack([Aeq, Aineq], format="csc")
-    l = np.hstack([leq, lineq])
-    u = np.hstack([ueq, uineq])
-
-    # ----------------------------
-    # 4) Objective P, q
-    # ----------------------------
-    Q, QN, R = objective.get_weights()
-
-    Q_block = sparse.kron(sparse.eye(N), sparse.csc_matrix(Q))
-    QN_block = sparse.csc_matrix(QN)
-    R_block = sparse.kron(sparse.eye(N), sparse.csc_matrix(R))
-
-    P = sparse.block_diag([Q_block, QN_block, R_block], format="csc")
-
-    q_x = np.hstack([
-        np.kron(np.ones(N), -Q @ x_ref),
-        -QN @ x_ref
-    ])
-    q_u = np.zeros(N * nu)
-    q = np.hstack([q_x, q_u])
-
-    return P, q, A, l, u
+    # 4) Update OSQP problem
+    prob.update(
+        Px=sparse.triu(P_new).data,
+        Ax=A_new.data,
+        q=q_new,
+        l=l_new,
+        u=u_new,
+    )

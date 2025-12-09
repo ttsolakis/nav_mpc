@@ -11,6 +11,7 @@ from models.simple_pendulum_model import SimplePendulumModel
 from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints
 from objectives.simple_pendulum_objective import SimplePendulumObjective
 from qp_formulation.qp_formulation import build_linear_constraints, build_quadratic_objective
+from planner.planner import evaluate_and_update_qp
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 from simulation.animation.simple_pendulum_animation import animate_pendulum
@@ -197,17 +198,7 @@ def main():
         # 3) Evaluate QP around new (x0, x̄, ū)
         start_eQP_time = time.perf_counter()
 
-        x_init = x.copy()
-        x_bar_seq = shift_state_sequence(X)   # shape (N+1, nx)
-        u_bar_seq = shift_input_sequence(U)   # shape (N,   nu)
-        args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
-        A_new = np.array(A_fun(*args), dtype=float)
-        A_new = sparse.csc_matrix(A_new)
-        l_new = np.array(l_fun(*args), dtype=float).reshape(-1)
-        u_new = np.array(u_fun(*args), dtype=float).reshape(-1)
-        P_new = P_fun(*args)             # still constant in the simple case
-        q_new = q_fun(*args).reshape(-1)
-        prob.update(Px=sparse.triu(P_new).data, Ax=A_new.data, q=q_new, l=l_new, u=u_new)
+        evaluate_and_update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun)
 
         end_eQP_time = time.perf_counter()
         
