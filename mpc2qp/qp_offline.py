@@ -1,4 +1,4 @@
-# nav_mpc/qp_formulation/qp_formulation.py
+# nav_mpc/qp_formulation/qp_offline.py
 
 from scipy import sparse
 import sympy as sp

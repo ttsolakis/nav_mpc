@@ -1,7 +1,8 @@
-# nav_mpc/planner.py
+# nav_mpc/utils/qp_online.py
 
 import numpy as np
 from scipy import sparse
+from typing import Callable, Tuple
 
 
 def shift_state_sequence(X: np.ndarray) -> np.ndarray:
@@ -9,8 +10,8 @@ def shift_state_sequence(X: np.ndarray) -> np.ndarray:
     Given previous optimal state sequence X of shape (N+1, nx),
     build a shifted linearization sequence X_bar of shape (N+1, nx):
 
-        X_bar[k]   = X[k+1]          for k = 0..N-1   (shift forward)
-        X_bar[N]   = 2*X[N] - X[N-1] (linear extrapolation for the last one)
+        X_bar[k] = X[k+1]          for k = 0..N-1   (shift forward)
+        X_bar[N] = 2*X[N] - X[N-1] (linear extrapolation for the last one)
     """
     X = np.asarray(X)
     X_bar = np.empty_like(X)
@@ -29,25 +30,25 @@ def shift_input_sequence(U: np.ndarray) -> np.ndarray:
     Given previous optimal input sequence U of shape (N, nu),
     build shifted U_bar of shape (N, nu):
 
-        U_bar[k]   = U[k+1]   for k = 0..N-2
-        U_bar[N-1] = U[N-1]   (hold last input)
+        U_bar[k]   = U[k+1]  for k = 0..N-2
+        U_bar[N-1] = U[N-1]  (hold last input)
     """
     U = np.asarray(U)
-    U_bar = np.empty_like(U)
-
     if U.shape[0] == 0:
-        return U  # degenerate case
+        return U
 
-    # shift all but last
+    U_bar = np.empty_like(U)
     U_bar[:-1, :] = U[1:, :]
-
-    # keep last input
     U_bar[-1, :] = U[-1, :]
-
     return U_bar
 
 
-def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: int) -> list:
+def pack_args(
+    x0: np.ndarray,
+    x_bar_seq: np.ndarray,
+    u_bar_seq: np.ndarray,
+    N: int,
+) -> list:
     """
     Build argument list in the SAME order as used in build_linear_*:
 
@@ -59,7 +60,7 @@ def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: i
     nx = x0.shape[0]
     nu = u_bar_seq.shape[1] if N > 0 else 0
 
-    args = []
+    args: list[float] = []
 
     # x0
     args.extend(np.asarray(x0).reshape(nx))
@@ -72,41 +73,43 @@ def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: i
     return args
 
 
-def evaluate_and_update_qp(
+def update_qp(
     prob,
     x: np.ndarray,
     X: np.ndarray,
     U: np.ndarray,
     N: int,
-    A_fun,
-    l_fun,
-    u_fun,
-    P_fun,
-    q_fun,
-):
+    A_fun: Callable,
+    l_fun: Callable,
+    u_fun: Callable,
+    P_fun: Callable,
+    q_fun: Callable,
+) -> None:
     """
-    Use the previous optimal sequences (X, U) and the current state x
-    to build new linearization points (x̄, ū), re-evaluate QP data,
-    and update the OSQP problem in-place.
-    """
+    Re-linearize around the new (x0, x̄, ū), rebuild QP data and update OSQP.
 
-    # 1) Build new initial condition + shifted linearization sequences
+    - prob   : OSQP instance
+    - x      : current state (x0 at this step)
+    - X, U   : previous optimal trajectories from the last QP solve
+    - N      : horizon length
+    - A_fun, l_fun, u_fun, P_fun, q_fun : lambdified QP builders
+    """
+    # Shift linearization sequences
     x_init = x.copy()
-    x_bar_seq = shift_state_sequence(X)   # shape (N+1, nx)
-    u_bar_seq = shift_input_sequence(U)   # shape (N,   U.shape[1])
+    x_bar_seq = shift_state_sequence(X)  # (N+1, nx)
+    u_bar_seq = shift_input_sequence(U)  # (N,   nu)
 
-    # 2) Pack args in correct order
+    # Pack args and evaluate numeric QP matrices/vectors
     args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
 
-    # 3) Re-evaluate QP matrices/vectors
     A_new = np.array(A_fun(*args), dtype=float)
     A_new = sparse.csc_matrix(A_new)
     l_new = np.array(l_fun(*args), dtype=float).reshape(-1)
     u_new = np.array(u_fun(*args), dtype=float).reshape(-1)
-    P_new = P_fun(*args)             # sparse.csc_matrix
+    P_new = P_fun(*args)                     # sparse.csc_matrix
     q_new = q_fun(*args).reshape(-1)
 
-    # 4) Update OSQP problem
+    # OSQP expects only the upper-triangular data for Px
     prob.update(
         Px=sparse.triu(P_new).data,
         Ax=A_new.data,
@@ -114,3 +117,14 @@ def evaluate_and_update_qp(
         l=l_new,
         u=u_new,
     )
+
+def extract_solution(res, nx: int, nu: int, N: int) -> Tuple[np.ndarray, np.ndarray]:
+    z = res.x
+    X_flat = z[0:(N + 1) * nx]
+    U_flat = z[(N + 1) * nx:]
+    X = X_flat.reshape(N + 1, nx)
+    U = U_flat.reshape(N,     nu)
+    return X, U
+
+
+
