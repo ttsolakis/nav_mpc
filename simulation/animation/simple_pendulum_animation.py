@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Rectangle
 from pathlib import Path
 
@@ -15,6 +15,7 @@ def animate_pendulum(
     umax: float,
     save_path: str | Path | None = None,
     show: bool = False,
+    save_gif: bool = False
 ):
     """
     Animate simple pendulum motion + torque bar.
@@ -52,7 +53,7 @@ def animate_pendulum(
     y_bob = -l * np.cos(theta)
 
     # Setup figure: left = pendulum, right = torque bar
-    fig, (ax_pend, ax_torque) = plt.subplots(1, 2, figsize=(8, 4))
+    fig, (ax_pend, ax_torque) = plt.subplots(1, 2, figsize=(8, 4), gridspec_kw={"wspace": 0.4})
     fig.suptitle("Pendulum MPC simulation")
 
     # --- Pendulum axis ---
@@ -129,9 +130,20 @@ def animate_pendulum(
         save_path = results_dir / "pendulum_animation.mp4"
 
     save_path = Path(save_path)
-    ani.save(save_path, fps=int(1.0 / (t[1] - t[0])))
+
+    # Save MP4
+    fps = int(1.0 / (t[1] - t[0]))
+    ani.save(save_path, fps=fps)
     print(f"[animator] Saved animation to {save_path}")
 
+    # Optionally also save GIF
+    if save_gif:
+        gif_path = save_path.with_suffix(".gif")
+        writer = PillowWriter(fps=fps)
+        ani.save(gif_path, writer=writer)
+        print(f"[animator] Saved GIF animation to {gif_path}")
+
+    # Show animation
     if show:
         plt.show()
     else:

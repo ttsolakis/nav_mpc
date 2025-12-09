@@ -37,11 +37,11 @@ def main():
     x_ref  = np.array([np.pi, 0.0])
 
     # Horizon and sampling time
-    N  = 100
+    N  = 70
     dt = 0.01
 
     # Simulation parameters
-    nsim    = 500
+    nsim    = 300
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
     sim     = ContinuousSimulator(system, sim_cfg)
 
@@ -147,8 +147,7 @@ def main():
     _, _, umin, umax = constraints.get_bounds()
     umax_scalar = float(np.max(np.abs(umax)))
 
-    animate_pendulum(system, total_time, x_traj, u_traj, umax=umax_scalar, show=False)
-
+    animate_pendulum(system, total_time, x_traj, u_traj, umax=umax_scalar, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()
