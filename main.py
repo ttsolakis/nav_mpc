@@ -1,7 +1,7 @@
 # nav_mpc/main.py
 
-import numpy as np
 from scipy import sparse
+import numpy as np
 import osqp
 import time
 
@@ -33,11 +33,11 @@ def main():
     constraints = SimplePendulumSystemConstraints(system)
     
     # Initial and reference states
-    x_init = np.array([np.pi - 0.1, 0.0])
+    x_init = np.array([0.0, 0.0])
     x_ref  = np.array([np.pi, 0.0])
 
     # Horizon and sampling time
-    N  = 40
+    N  = 100
     dt = 0.01
 
     # Simulation parameters
@@ -55,6 +55,7 @@ def main():
     # Problem dimensions
     nx = system.state_dim
     nu = system.input_dim
+    nc = constraints.constraints_dim
 
     # Symbolic linearization + lambdified callables
     print("Building QP...")
@@ -127,26 +128,26 @@ def main():
     print("Main loop complete.")
 
     if profiling:
-        print_timing_summary(timing_stats, N=N, nx=system.state_dim, nu=system.input_dim, nc=None, show_system_info=show_system_info)
+        print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, show_system_info=show_system_info)
 
     # # ----------------------------------------
     # # ------------ Plot & Animate ------------
     # # ---------------------------------------- 
 
     print("Plotting and saving...")
-    # x_traj = np.vstack(x_traj)       # shape (nsim+1, nx)
-    # u_traj = np.vstack(u_traj)       # shape (nsim,   nu)
-    # total_time = dt * np.arange(x_traj.shape[0])  # length nsim+1
+    x_traj = np.vstack(x_traj)       # shape (nsim+1, nx)
+    u_traj = np.vstack(u_traj)       # shape (nsim,   nu)
+    total_time = dt * np.arange(x_traj.shape[0])  # length nsim+1
 
-    # # Plot state and input trajectories (generic)
-    # plot_state_input_trajectories(system, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
+    # Plot state and input trajectories (generic)
+    plot_state_input_trajectories(system, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
 
     print("Animating and saving...")
-    # # For the pendulum, torque bounds are in SimplePendulumSystemConstraints
-    # _, _, umin, umax = constraints.get_bounds()
-    # umax_scalar = float(np.max(np.abs(umax)))
+    # For the pendulum, torque bounds are in SimplePendulumSystemConstraints
+    _, _, umin, umax = constraints.get_bounds()
+    umax_scalar = float(np.max(np.abs(umax)))
 
-    # animate_pendulum(system, total_time, x_traj, u_traj, umax=umax_scalar, show=False)
+    animate_pendulum(system, total_time, x_traj, u_traj, umax=umax_scalar, show=False)
 
 
 if __name__ == "__main__":

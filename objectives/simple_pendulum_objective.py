@@ -19,8 +19,8 @@ class SimplePendulumObjective(Objective):
         super().__init__(system)
 
         # LQR-like weights
-        self.Q  = np.diag([10.0, 1.0])   # stage state cost
-        self.QN = np.diag([10.0, 1.0])   # terminal state cost
+        self.Q  = np.diag([100.0, 1.0])   # stage state cost
+        self.QN = np.diag([100.0, 1.0])   # terminal state cost
         self.R  = np.diag([0.1])         # stage input cost
 
         # Reference: upright (pi, 0), zero torque

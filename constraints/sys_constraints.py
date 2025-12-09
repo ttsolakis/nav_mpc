@@ -1,5 +1,3 @@
-# nav_mpc/constraints/sys_constraints.py
-
 from abc import ABC, abstractmethod
 import numpy as np
 import sympy as sp
@@ -8,30 +6,7 @@ import sympy as sp
 class SystemConstraints(ABC):
     """
     Abstract base class for system constraints.
-
-    Responsibilities:
-      - store numeric box bounds on x and u
-      - let child classes define symbolic inequality constraints g(x,u) <= 0
-        via build_system_constraints()
-      - provide a constraints_symbolic() accessor, similar to dynamics_symbolic()
-        in SystemModel.
-
-    Attributes
-    ----------
-    state_dim : int
-        Dimension of the state vector x.
-    input_dim : int
-        Dimension of the input vector u.
-    x_sym : sympy.Matrix
-        Symbolic state vector (column) of length state_dim.
-    u_sym : sympy.Matrix
-        Symbolic input vector (column) of length input_dim.
-    g_sym : sympy.Matrix
-        Symbolic inequality constraints g(x,u) <= 0, shape (nc, 1).
-    x_min, x_max : np.ndarray
-        State box bounds, shape (state_dim,).
-    u_min, u_max : np.ndarray or float
-        Input box bounds.
+    ...
     """
 
     def __init__(self, state_dim: int, input_dim: int) -> None:
@@ -53,29 +28,18 @@ class SystemConstraints(ABC):
 
         # Placeholder for constraints; child must define this in build_system_constraints()
         self._g_sym: sp.Matrix | None = None
+        self._nc: int | None = None    # number of constraints
 
     # ---------------------------
     # Symbolic inequality g(x,u) <= 0
     # ---------------------------
     @abstractmethod
     def build_system_constraints(self) -> sp.Matrix:
-        """
-        Child classes must construct and return g(x,u) as a sympy.Matrix of
-        shape (nc, 1), using self.x_sym and self.u_sym (or system-provided
-        symbols, if they prefer).
-
-        Example:
-            x = self.x_sym
-            u = self.u_sym
-            g1 = u[0] - umax
-            g2 = -u[0] + umin
-            return sp.Matrix([g1, g2])
-        """
+        ...
         raise NotImplementedError
 
     def constraints_symbolic(self) -> sp.Matrix:
         """
-        Convenience accessor, analogous to SystemModel.dynamics_symbolic().
         Lazily builds g(x,u) once by calling build_system_constraints().
         """
         if self._g_sym is None:
@@ -88,4 +52,29 @@ class SystemConstraints(ABC):
                     f"g_sym must be a column vector (nc, 1), got {self._g_sym.shape}"
                 )
 
+            # Store number of constraints
+            self._nc = int(self._g_sym.shape[0])
+
         return self._g_sym
+
+    @property
+    def constraints_dim(self) -> int:
+        """
+        Number of inequality constraints nc.
+        """
+        if self._nc is None:
+            # Ensure g_sym has been built
+            _ = self.constraints_symbolic()
+        return int(self._nc)
+
+    def get_bounds(self):
+        """
+        Return numeric box bounds as (x_min, x_max, u_min, u_max).
+        Copies are returned to avoid accidental in-place modification.
+        """
+        return (
+            self.x_min.copy(),
+            self.x_max.copy(),
+            self.u_min.copy(),
+            self.u_max.copy(),
+        )

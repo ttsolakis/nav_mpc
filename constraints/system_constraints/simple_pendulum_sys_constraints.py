@@ -1,5 +1,3 @@
-# nav_mpc/constraints/system_constraints/simple_pendulum_sys_constraints.py
-
 import numpy as np
 import sympy as sp
 
@@ -27,16 +25,16 @@ class SimplePendulumSystemConstraints(SystemConstraints):
     def __init__(self, system: SystemModel) -> None:
         self.system = system
 
-        # Initialize base (creates x_sym, u_sym, bounds defaults)
+        # Initialize base (creates x_sym, u_sym, default bounds)
         super().__init__(system.state_dim, system.input_dim)
 
         # State constraints
         self.x_min[:] = -np.inf
         self.x_max[:] = +np.inf
 
-        # Input constraints (SISO; using scalars)
-        self.u_min = -100.0
-        self.u_max = +100.0
+        # Input constraints (SISO): fill arrays in the base class
+        self.u_min[:] = -50.0
+        self.u_max[:] = +50.0
 
     def build_system_constraints(self) -> sp.Matrix:
         """
@@ -46,16 +44,14 @@ class SimplePendulumSystemConstraints(SystemConstraints):
           g1(x,u) = u - u_max <= 0
           g2(x,u) = -u + u_min <= 0
         """
-        # You can either use the base x_sym/u_sym or the system ones.
-        # Here we use the system's, to guarantee same symbols as in dynamics:
-        # x_sym = self.system.state_symbolic()   # (nx, 1) – unused here
-        # u_sym = self.system.input_symbolic()   # (nu, 1)
+        # Use base class symbolic variables
+        u_sym = self.u_sym  # (nu, 1)
 
-        # Or use the base class symbolic variables:
-        x_sym = self.x_sym               # (nx, 1) – unused here
-        u_sym = self.u_sym               # (nu, 1)
+        # Convert numpy bounds to plain Python floats for sympy:
+        u_max = float(self.u_max[0])
+        u_min = float(self.u_min[0])
 
-        g1 = u_sym[0] - self.u_max   # u <= u_max
-        g2 = -u_sym[0] + self.u_min  # u >= u_min -> -u + u_min <= 0
+        g1 = u_sym[0] - u_max   # u <= u_max  -> u - u_max <= 0
+        g2 = -u_sym[0] + u_min  # u >= u_min  -> -u + u_min <= 0
 
         return sp.Matrix([g1, g2])
