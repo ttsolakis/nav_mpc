@@ -9,7 +9,7 @@ def print_system_info():
     Works on Linux; uses /proc/cpuinfo if available.
     """
     uname = platform.uname()
-    print("=== System info ===")
+    print("=========================== System info ===========================")
     print(f"OS:       {uname.system} {uname.release}")
     print(f"Machine:  {uname.machine}")
 
@@ -27,4 +27,4 @@ def print_system_info():
     logical = os.cpu_count()
     print(f"Cores:    {logical} logical")
 
-    print("====================\n")
+    print("===================================================================")

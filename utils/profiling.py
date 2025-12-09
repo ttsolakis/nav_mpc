@@ -82,7 +82,7 @@ def print_timing_summary(
     avg_sim  = stats["total_sim"]  / n_steps
     avg_eval = stats["total_eval"] / n_steps
 
-    print("\n=== Timing statistics over MPC loop ===")
+    print("\n================= Timing statistics over MPC loop =================")
     if nc is None:
         print(f"Problem size: N = {N}, nx = {nx}, nu = {nu}, nc = (unknown / TODO)")
     else:

@@ -26,6 +26,7 @@ def main():
     # Enable debugging & profiling
     debugging = False
     profiling = True
+    show_system_info = True
     
     # System, objective, constraints
     system      = SimplePendulumModel()
@@ -57,23 +58,21 @@ def main():
     nu = system.input_dim
 
     # Symbolic linearization + lambdified callables
+    print("Building QP...")
     A_fun, l_fun, u_fun = build_linear_constraints(system, constraints, N, dt, debug=False)
     P_fun, q_fun        = build_quadratic_objective(system, objective, N, debug=False)
 
-    # Initial linearization points: all zeros
-    x_bar_seq = np.zeros((N + 1, system.state_dim))
-    u_bar_seq = np.zeros((N,     system.input_dim))
-    args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
-
     # Evaluate QP data once (initial)
+    print("Setting up OSQP problem...")
+    x_bar_seq = np.zeros((N + 1, nx))
+    u_bar_seq = np.zeros((N,     nu))
+    args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
     A = np.array(A_fun(*args), dtype=float)
     A = sparse.csc_matrix(A)
     l = np.array(l_fun(*args), dtype=float).reshape(-1)
     u = np.array(u_fun(*args), dtype=float).reshape(-1)
     P = P_fun(*args)             # sparse.csc_matrix
     q = q_fun(*args).reshape(-1)
-
-    # Initialize OSQP
     prob = osqp.OSQP()
     prob.setup(P, q, A, l, u, warm_starting=True, verbose=False)
 
@@ -87,6 +86,7 @@ def main():
     x_traj = [x.copy()]   # include initial state
     u_traj = []           # nsim control inputs
 
+    print("Running main loop...")
     for i in range(nsim):
 
         # 1) Solve current QP and extract solution
@@ -137,11 +137,13 @@ def main():
             update_timing_stats(timing_stats, start_opt_time, end_opt_time, start_sim_time, end_sim_time, start_eQP_time, end_eQP_time)
 
     if profiling:
-        print_timing_summary(timing_stats, N=N, nx=system.state_dim, nu=system.input_dim, nc=None, show_system_info=True)
+        print_timing_summary(timing_stats, N=N, nx=system.state_dim, nu=system.input_dim, nc=None, show_system_info=show_system_info)
 
     # # ----------------------------------------
     # # ------------ Plot & Animate ------------
     # # ---------------------------------------- 
+
+    print("Plotting and saving...")
     # x_traj = np.vstack(x_traj)       # shape (nsim+1, nx)
     # u_traj = np.vstack(u_traj)       # shape (nsim,   nu)
     # total_time = dt * np.arange(x_traj.shape[0])  # length nsim+1
@@ -149,6 +151,7 @@ def main():
     # # Plot state and input trajectories (generic)
     # plot_state_input_trajectories(system, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
 
+    print("Animating and saving...")
     # # For the pendulum, torque bounds are in SimplePendulumSystemConstraints
     # _, _, umin, umax = constraints.get_bounds()
     # umax_scalar = float(np.max(np.abs(umax)))
