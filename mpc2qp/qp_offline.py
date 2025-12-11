@@ -7,6 +7,47 @@ from models.dynamics import SystemModel
 from constraints.sys_constraints import SystemConstraints
 from objectives.objectives import Objective
 
+def build_theta_symbols(nx: int, nu: int, N: int):
+    """
+    Create a flat list of SymPy symbols [theta0, ..., theta{T-1}]
+    where T = nx + N*(nx + nu),
+    in the SAME order as pack_args() builds the numeric theta.
+    """
+    total_len = nx + N * (nx + nu)
+    theta_syms = sp.symbols(f"theta0:{total_len}", real=True)
+    return list(theta_syms)
+
+
+def theta_views(theta_syms, nx: int, nu: int, N: int):
+    """
+    Given flat theta_syms, return symbolic views:
+
+      x0_syms    : list of length nx
+      xbar_syms  : list of length N, each entry a SymPy Matrix(nx, 1)
+      ubar_syms  : list of length N, each entry a SymPy Matrix(nu, 1)
+
+    such that the layout matches pack_args().
+    """
+    idx = 0
+
+    # x0
+    x0_syms = theta_syms[idx:idx + nx]
+    idx += nx
+
+    xbar_syms = []
+    ubar_syms = []
+
+    for _ in range(N):
+        xk_syms = theta_syms[idx:idx + nx]
+        idx += nx
+        uk_syms = theta_syms[idx:idx + nu]
+        idx += nu
+
+        xbar_syms.append(sp.Matrix(xk_syms))
+        ubar_syms.append(sp.Matrix(uk_syms))
+
+    return x0_syms, xbar_syms, ubar_syms
+
 
 def build_linear_equality_constraints(system: SystemModel, N: int, dt: float, debug: bool=False):
     """
@@ -95,28 +136,11 @@ def build_linear_equality_constraints(system: SystemModel, N: int, dt: float, de
         sp.pprint(cd_generic)
 
     # -----------------------------------------------------------------
-    #  3) Create symbols for x0, x̄_k, ū_k
+    #  3) Create theta symbols and views (x0, x̄_k, ū_k)
     # -----------------------------------------------------------------
-
-    x0_syms = sp.symbols(f"x0_0:{nx}", real=True)
-    x0_vec  = sp.Matrix(x0_syms)
-
-    xbar_syms = []
-    ubar_syms = []
-    for k in range(N):
-        xk_syms = sp.symbols(f"xbar{k}_0:{nx}", real=True)
-        uk_syms = sp.symbols(f"ubar{k}_0:{nu}", real=True)
-        xbar_syms.append(sp.Matrix(xk_syms))
-        ubar_syms.append(sp.Matrix(uk_syms))
-
-    if debug:
-        print("x0_syms:")
-        sp.pprint(x0_vec)
-        for k in range(N):
-            print(f"xbar_syms[{k}]:")
-            sp.pprint(xbar_syms[k])
-            print(f"ubar_syms[{k}]:")
-            sp.pprint(ubar_syms[k])
+    theta_syms = build_theta_symbols(nx, nu, N)
+    x0_syms, xbar_syms, ubar_syms = theta_views(theta_syms, nx, nu, N)
+    x0_vec = sp.Matrix(x0_syms)
 
     # -----------------------------------------------------------------
     #  4) Ad_k, Bd_k, cd_k by substitution: (x_sym,u_sym) -> (x̄_k,ū_k)
@@ -190,33 +214,13 @@ def build_linear_equality_constraints(system: SystemModel, N: int, dt: float, de
             leq_sym[row_start + i, 0] = cd_k[i]
             ueq_sym[row_start + i, 0] = cd_k[i]
 
-
-    # if debug:
-    #     print("Aeq_sym:")
-    #     sp.pprint(Aeq_sym)
-    #     print("leq_sym:")
-    #     sp.pprint(leq_sym)
-    #     print("ueq_sym:")
-    #     sp.pprint(ueq_sym)
-
     # -----------------------------------------------------------------
-    #  6) Lambdify Aeq, leq, ueq with argument order:
-    # [x0_0..x0_{nx-1},
-    #  xbar0_0..xbar0_{nx-1}, ubar0_0..ubar0_{nu-1},
-    #  ...
-    #  xbar{N-1}_0.., ubar{N-1}_0..]
+    #  6) Lambdify Aeq, leq, ueq with a SINGLE argument: theta (1D array)
     # -----------------------------------------------------------------
-    arg_list = list(x0_syms)
-    for k in range(N):
-        arg_list.extend(list(xbar_syms[k]))
-        arg_list.extend(list(ubar_syms[k]))
 
-    Aeq_fun = sp.lambdify(arg_list, Aeq_sym, "numpy")
-    leq_fun = sp.lambdify(arg_list, leq_sym, "numpy")
-    ueq_fun = sp.lambdify(arg_list, ueq_sym, "numpy")
-
-    # if debug:
-        # print("Lambdified Aeq_fun, leq_fun, ueq_fun created.")
+    Aeq_fun = sp.lambdify([theta_syms], Aeq_sym, "numpy")
+    leq_fun = sp.lambdify([theta_syms], leq_sym, "numpy")
+    ueq_fun = sp.lambdify([theta_syms], ueq_sym, "numpy")
 
     return Aeq_fun, leq_fun, ueq_fun
 
@@ -302,28 +306,11 @@ def build_linear_inequality_constraints(system: SystemModel, constraints: System
         sp.pprint(Hu_sym)
 
     # ---------------------------------------------------------
-    # 2) Create symbols for x0 and the linearization sequence
+    # 2) Create theta symbols and views for linearization sequence
     # ---------------------------------------------------------
-    # x0 (for consistent arg ordering, even though not used here)
-    x0_syms = sp.symbols(f"x0_0:{nx}", real=True)
-    x0_vec  = sp.Matrix(x0_syms)  # not used in constraints, but kept for arg ordering
-
-    xbar_syms = []
-    ubar_syms = []
-    for k in range(N):
-        xk_syms = sp.symbols(f"xbar{k}_0:{nx}", real=True)
-        uk_syms = sp.symbols(f"ubar{k}_0:{nu}", real=True)
-        xbar_syms.append(sp.Matrix(xk_syms))
-        ubar_syms.append(sp.Matrix(uk_syms))
-
-    if debug:
-        print("x0_syms:")
-        sp.pprint(x0_vec)
-        for k in range(N):
-            print(f"xbar_syms[{k}]:")
-            sp.pprint(xbar_syms[k])
-            print(f"ubar_syms[{k}]:")
-            sp.pprint(ubar_syms[k])
+    theta_syms = build_theta_symbols(nx, nu, N)
+    x0_syms, xbar_syms, ubar_syms = theta_views(theta_syms, nx, nu, N)
+    # x0_syms not used directly in constraints, but present in theta for consistency
 
     # ---------------------------------------------------------
     # 3) Stage-wise Hx_k, Hu_k, h_k via substitution
@@ -412,16 +399,12 @@ def build_linear_inequality_constraints(system: SystemModel, constraints: System
         sp.pprint(uineq_sym)
 
     # ---------------------------------------------------------
-    # 5) Lambdify with the same arg ordering as equality builder
+    # 5) Lambdify with a SINGLE argument: theta
     # ---------------------------------------------------------
-    arg_list = list(x0_syms)  # x0_0..x0_{nx-1} (not used, but kept for consistency)
-    for k in range(N):
-        arg_list.extend(list(xbar_syms[k]))
-        arg_list.extend(list(ubar_syms[k]))
 
-    Aineq_fun = sp.lambdify(arg_list, Aineq_sym, "numpy")
-    lineq_fun = sp.lambdify(arg_list, lineq_sym, "numpy")
-    uineq_fun = sp.lambdify(arg_list, uineq_sym, "numpy")
+    Aineq_fun  = sp.lambdify([theta_syms], Aineq_sym, "numpy")
+    lineq_fun  = sp.lambdify([theta_syms], lineq_sym, "numpy")
+    uineq_fun  = sp.lambdify([theta_syms], uineq_sym, "numpy")
 
     return Aineq_fun, lineq_fun, uineq_fun
 
@@ -439,11 +422,10 @@ def build_linear_constraints(system: SystemModel, constraints: SystemConstraints
     Aeq_fun, leq_fun, ueq_fun = build_linear_equality_constraints(system, N, dt, debug=debug)
     Aineq_fun, lineq_fun, uineq_fun = build_linear_inequality_constraints(system, constraints, N, debug=debug)
 
-    def A_fun(*args):
+    def A_fun(theta: np.ndarray):
         """Return stacked A (eq + ineq) as dense ndarray."""
-        Aeq_num   = np.asarray(Aeq_fun(*args),   dtype=float)
-        Aineq_num = np.asarray(Aineq_fun(*args), dtype=float)
-
+        Aeq_num   = np.asarray(Aeq_fun(theta),   dtype=float)
+        Aineq_num = np.asarray(Aineq_fun(theta), dtype=float)
         A = np.vstack([Aeq_num, Aineq_num])
 
         if debug:
@@ -453,11 +435,10 @@ def build_linear_constraints(system: SystemModel, constraints: SystemConstraints
 
         return A
 
-    def l_fun(*args):
+    def l_fun(theta: np.ndarray):
         """Return stacked l (eq + ineq)."""
-        leq_num   = np.asarray(leq_fun(*args),   dtype=float).reshape(-1)
-        lineq_num = np.asarray(lineq_fun(*args), dtype=float).reshape(-1)
-
+        leq_num   = np.asarray(leq_fun(theta),   dtype=float).reshape(-1)
+        lineq_num = np.asarray(lineq_fun(theta), dtype=float).reshape(-1)
         l = np.hstack([leq_num, lineq_num])
 
         if debug:
@@ -467,11 +448,10 @@ def build_linear_constraints(system: SystemModel, constraints: SystemConstraints
 
         return l
 
-    def u_fun(*args):
+    def u_fun(theta: np.ndarray):
         """Return stacked u (eq + ineq)."""
-        ueq_num   = np.asarray(ueq_fun(*args),   dtype=float).reshape(-1)
-        uineq_num = np.asarray(uineq_fun(*args), dtype=float).reshape(-1)
-
+        ueq_num   = np.asarray(ueq_fun(theta),   dtype=float).reshape(-1)
+        uineq_num = np.asarray(uineq_fun(theta), dtype=float).reshape(-1)
         u = np.hstack([ueq_num, uineq_num])
 
         if debug:
@@ -480,6 +460,7 @@ def build_linear_constraints(system: SystemModel, constraints: SystemConstraints
             print("u (stacked) shape:", u.shape)
 
         return u
+
 
     return A_fun, l_fun, u_fun
 
@@ -596,15 +577,14 @@ def build_quadratic_objective(system: SystemModel, objective: Objective, N: int,
     #    Later, for nonlinear error maps, you can re-use *args inside here.
     # ------------------------------------------------------------
 
-    def P_fun(*args):
+    def P_fun(theta: np.ndarray):
         """
-        Same arg ordering as A_fun/l_fun/u_fun:
-          [x0, xbar0, ubar0, ..., xbar{N-1}, ubar{N-1}]
+        Same theta layout as A_fun/l_fun/u_fun.
         Currently ignored (P is constant), but kept for future TV extensions.
         """
         return P
 
-    def q_fun(*args):
+    def q_fun(theta: np.ndarray):
         return q
 
     return P_fun, q_fun

@@ -99,26 +99,23 @@ def set_qp(
     theta = pack_args(x0, X_bar, U_bar, N)
 
     # ---- A: dense once, sparse CSC for OSQP setup ----
-    A_dense = np.array(A_fun(*theta), dtype=float)
+    A_dense = np.array(A_fun(theta), dtype=float)
     A = sparse.csc_matrix(A_dense)
 
-    l = np.array(l_fun(*theta), dtype=float).reshape(-1)
-    u = np.array(u_fun(*theta), dtype=float).reshape(-1)
+    l = np.array(l_fun(theta), dtype=float).reshape(-1)
+    u = np.array(u_fun(theta), dtype=float).reshape(-1)
 
     # ---- P: first evaluation (P_fun returns sparse) ----
-    P_raw0 = P_fun(*theta)
+    P_raw0 = P_fun(theta)
     if sparse.isspmatrix(P_raw0):
-        # Keep sparse structure
         P_full0 = P_raw0.tocsc()
     else:
-        # Defensive: handle dense fallback
         P_dense0 = np.array(P_raw0, dtype=float)
         P_full0 = sparse.csc_matrix(P_dense0)
 
-    # OSQP uses only the upper triangle (we keep that)
     P0 = sparse.triu(P_full0).tocsc()
 
-    q = q_fun(*theta).reshape(-1)
+    q = q_fun(theta).reshape(-1)
 
     # ---- A sparsity pattern (CSC order) ----
     n_cols_A = A.shape[1]
@@ -169,14 +166,13 @@ def update_qp(
     theta = pack_args(x_init, x_bar_seq, u_bar_seq, N)
 
     # --- A: dense, then sample nonzeros in CSC order ---
-    A_dense = np.array(A_fun(*theta), dtype=float)
+    A_dense = np.array(A_fun(theta), dtype=float)
     Ax_new = A_dense[A_row_idx, A_col_idx]
 
-    l_new = np.array(l_fun(*theta), dtype=float).reshape(-1)
-    u_new = np.array(u_fun(*theta), dtype=float).reshape(-1)
+    l_new = np.array(l_fun(theta), dtype=float).reshape(-1)
+    u_new = np.array(u_fun(theta), dtype=float).reshape(-1)
 
-    # --- P: evaluate, ensure dense, then sample upper-tri entries in fixed pattern ---
-    P_raw_new = P_fun(*theta)
+    P_raw_new = P_fun(theta)
     if sparse.isspmatrix(P_raw_new):
         P_dense_new = P_raw_new.toarray()
     else:
@@ -184,7 +180,7 @@ def update_qp(
 
     Px_new = P_dense_new[P_row_idx, P_col_idx]
 
-    q_new = q_fun(*theta).reshape(-1)
+    q_new = q_fun(theta).reshape(-1)
 
     prob.update(
         Px=Px_new,
