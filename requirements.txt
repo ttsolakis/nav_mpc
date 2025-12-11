@@ -1,6 +1,8 @@
 numpy
 scipy
 sympy
-cython
 osqp
+cython
 matplotlib
+
+
