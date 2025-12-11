@@ -27,7 +27,7 @@ def main():
     show_system_info = True
 
     # Use Cython for speed in embedded systems (online functions ~5x times faster than pure Python)
-    use_cython = True
+    use_cython = False
     
     # System, objective, constraints
     system      = SimplePendulumModel()
