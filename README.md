@@ -107,9 +107,9 @@ Performance with N = 70, dt = 0.01 s on a laptop CPU:
 
 | Stage | Mean | Min | Max |
 |-------|-------|-------|-------|
-| QP eval | **0.93 ms** | 0.45 ms | 4.22 ms |
-| QP solve | **0.77 ms** | 0.17 ms | 4.99 ms |
-| Total MPC | **0.47 ms** | 0.29 ms | **2.69 ms** |
+| QP eval | 0.93 ms | 0.45 ms | 4.22 ms |
+| QP solve | 0.77 ms | 0.17 ms | 4.99 ms |
+| Total MPC | **0.47 ms** | **0.29 ms** | **2.69 ms** |
 
 ---
 
