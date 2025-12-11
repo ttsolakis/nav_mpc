@@ -53,7 +53,7 @@ nav_mpc/
 **nav_mpc** provides:
 - An easy way to define a full nonlinear MPC problem — dynamics, constraints, and objectives are written symbolically, just like on paper.
 - A fast development workflow in Python, combined with optional Cython compilation for ultra-fast numerical evaluation when needed.
-- Realtime performance: the controller runs ultra-fat with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines.
+- Realtime performance: the controller runs ultra-fast with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines.
 - A clean, minimal set of dependencies and a research-friendly architecture that enables rapid prototyping, fast iteration, and straightforward extension to new robotic systems.
 
 ---
@@ -97,7 +97,7 @@ Subsequent runs use cached `.so` files and start immediately.
 
 ## 🧪 Example Output (Pendulum MPC)
 
-(Add your plots and GIFs here)
+<img src="examples/simple_pendulum/pendulum_animation.gif" width="400">
 
 Performance with N = 70, dt = 0.01 s on a laptop CPU:
 
