@@ -83,8 +83,8 @@ def main():
 
     # Initialize OSQP solver
     prob = osqp.OSQP()
-    P, q, A, l, u, = set_qp(x, x_bar_seq, u_bar_seq, N, A_fun, l_fun, u_fun, P_fun, q_fun)
-    prob.setup(P, q, A, l, u, warm_starting=True, verbose=False)        
+    P, q, A, l, u, A_row_idx, A_col_idx = set_qp(x, x_bar_seq, u_bar_seq, N, A_fun, l_fun, u_fun, P_fun, q_fun)
+    prob.setup(P, q, A, l, u, warm_starting=True, verbose=False)
 
     print("Running main loop...")
     for i in range(nsim):
@@ -93,8 +93,8 @@ def main():
         start_eQP_time = time.perf_counter()
 
         if i > 0:
-            update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun)
-
+            update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun, A_row_idx, A_col_idx)
+                      
         end_eQP_time = time.perf_counter()
 
         # 2) Solve current QP and extract solution

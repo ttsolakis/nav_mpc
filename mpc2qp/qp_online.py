@@ -42,36 +42,6 @@ def shift_input_sequence(U: np.ndarray) -> np.ndarray:
     U_bar[-1, :] = U[-1, :]
     return U_bar
 
-
-# def pack_args(
-#     x0: np.ndarray,
-#     x_bar_seq: np.ndarray,
-#     u_bar_seq: np.ndarray,
-#     N: int,
-# ) -> list:
-#     """
-#     Build argument list in the SAME order as used in build_linear_*:
-
-#       [x0_0,...,x0_{nx-1},
-#        xbar0_0,...,xbar0_{nx-1}, ubar0_0,...,ubar0_{nu-1},
-#        ...,
-#        xbar{N-1}_0,...,xbar{N-1}_{nx-1}, ubar{N-1}_0,...,ubar{N-1}_{nu-1}]
-#     """
-#     nx = x0.shape[0]
-#     nu = u_bar_seq.shape[1] if N > 0 else 0
-
-#     args: list[float] = []
-
-#     # x0
-#     args.extend(np.asarray(x0).reshape(nx))
-
-#     # stages 0..N-1
-#     for k in range(N):
-#         args.extend(np.asarray(x_bar_seq[k]).reshape(nx))
-#         args.extend(np.asarray(u_bar_seq[k]).reshape(nu))
-
-#     return args
-
 def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: int) -> list:
     nx = x0.shape[0]
     nu = u_bar_seq.shape[1] if N > 0 else 0
@@ -99,7 +69,6 @@ def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: i
 
     return args
 
-
 def set_qp(
     x0: np.ndarray,
     X_bar: np.ndarray,
@@ -111,16 +80,11 @@ def set_qp(
     P_fun,
     q_fun,
 ):
-    """
-    Build full QP matrices (P, q, A, l, u) for a given (x0, X̄, Ū).
-
-    This is used for the first OSQP setup, and can also be reused
-    inside update_qp if you want to avoid duplicated code.
-    """
     args = pack_args(x0, X_bar, U_bar, N)
 
-    A = np.array(A_fun(*args), dtype=float)
-    A = sparse.csc_matrix(A)
+    # Dense A, then CSC once
+    A_dense = np.array(A_fun(*args), dtype=float)
+    A = sparse.csc_matrix(A_dense)
 
     l = np.array(l_fun(*args), dtype=float).reshape(-1)
     u = np.array(u_fun(*args), dtype=float).reshape(-1)
@@ -128,8 +92,26 @@ def set_qp(
     P = P_fun(*args)             # assumed sparse.csc_matrix already
     q = q_fun(*args).reshape(-1)
 
-    return P, q, A, l, u
+    # --- Store A sparsity pattern (in CSC order) ---
+    # In CSC:
+    #   - data: values
+    #   - indices: row indices of each nonzero
+    #   - indptr: [start idx of column j]
+    #
+    # data is ordered column-by-column, so we can reconstruct
+    # the col index for each nonzero:
+    n_cols = A.shape[1]
+    row_idx = A.indices.copy()
+    col_idx = np.empty_like(row_idx)
 
+    for j in range(n_cols):
+        start = A.indptr[j]
+        end   = A.indptr[j + 1]
+        col_idx[start:end] = j
+
+    # For convenience, also build pairs we can reuse if we want:
+    # (but row_idx, col_idx with CSC order is enough)
+    return P, q, A, l, u, row_idx, col_idx
 
 def update_qp(
     prob,
@@ -142,35 +124,34 @@ def update_qp(
     u_fun: Callable,
     P_fun: Callable,
     q_fun: Callable,
+    A_row_idx: np.ndarray,
+    A_col_idx: np.ndarray,
 ) -> None:
-    """
-    Re-linearize around the new (x0, x̄, ū), rebuild QP data and update OSQP.
-
-    - prob   : OSQP instance
-    - x      : current state (x0 at this step)
-    - X, U   : previous optimal trajectories from the last QP solve
-    - N      : horizon length
-    - A_fun, l_fun, u_fun, P_fun, q_fun : lambdified QP builders
-    """
     # Shift linearization sequences
-    x_init = x.copy()
+    x_init    = x.copy()
     x_bar_seq = shift_state_sequence(X)  # (N+1, nx)
     u_bar_seq = shift_input_sequence(U)  # (N,   nu)
 
-    # Pack args and evaluate numeric QP matrices/vectors
+    # Pack args and evaluate numeric QP pieces
     args = pack_args(x_init, x_bar_seq, u_bar_seq, N)
 
-    A_new = np.array(A_fun(*args), dtype=float)
-    A_new = sparse.csc_matrix(A_new)
+    # Dense A just for values; no more CSC building
+    A_dense = np.array(A_fun(*args), dtype=float)
+
+    # Extract only values at nonzero positions (same order as CSC .data)
+    Ax_new = A_dense[A_row_idx, A_col_idx]
+
     l_new = np.array(l_fun(*args), dtype=float).reshape(-1)
     u_new = np.array(u_fun(*args), dtype=float).reshape(-1)
+
+    # P_new is still built fully for now
     P_new = P_fun(*args)                     # sparse.csc_matrix
+    Px_new = sparse.triu(P_new).data
     q_new = q_fun(*args).reshape(-1)
 
-    # OSQP expects only the upper-triangular data for Px
     prob.update(
-        Px=sparse.triu(P_new).data,
-        Ax=A_new.data,
+        Px=Px_new,
+        Ax=Ax_new,
         q=q_new,
         l=l_new,
         u=u_new,
