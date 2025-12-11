@@ -27,7 +27,7 @@ def main():
     show_system_info = True
 
     # Use Cython for speed in embedded systems (online functions ~5x times faster than pure Python)
-    use_cython = False
+    use_cython = True
     
     # System, objective, constraints
     system      = SimplePendulumModel()
@@ -41,6 +41,7 @@ def main():
     # Horizon and sampling time
     N  = 70
     dt = 0.01
+    max_eval_qp = 0.005  # Max time it takes for QP evaluation (needs to be )
 
     # Simulation parameters
     nsim    = 300
@@ -93,7 +94,8 @@ def main():
     # Initialize OSQP solver
     prob = osqp.OSQP()
     P, q, A, l, u, A_row_idx, A_col_idx, P_row_idx, P_col_idx = set_qp(x, x_bar_seq, u_bar_seq, N, A_fun, l_fun, u_fun, P_fun, q_fun)
-    prob.setup(P, q, A, l, u, warm_starting=True, verbose=False)
+    osqp_time_limit = max(dt - max_eval_qp, 0.0)
+    prob.setup(P, q, A, l, u, warm_starting=True, verbose=False, time_limit=osqp_time_limit)
 
     print("Running main loop...")
     for i in range(nsim):
@@ -110,7 +112,7 @@ def main():
         start_opt_time = time.perf_counter()
 
         res = prob.solve()
-        if res.info.status != "solved": raise ValueError(f"OSQP did not solve the problem at step {i}! Status: {res.info.status}")
+        if res.info.status not in ["solved", "solved inaccurate"]: raise ValueError(f"OSQP did not solve the problem at step {i}! Status: {res.info.status}")
         X, U = extract_solution(res, nx, nu, N)
 
         end_opt_time = time.perf_counter()
