@@ -97,6 +97,8 @@ Subsequent runs use cached `.so` files and start immediately.
 
 ## 🧪 Example Output (Pendulum MPC)
 
+Pendulum swing-up and stabilization with LTV-MPC:
+
 <img src="examples/simple_pendulum/pendulum_animation.gif" width="400">
 <img src="examples/simple_pendulum/state_trajectories.png" width="400">
 <img src="examples/simple_pendulum/input_trajectories.png" width="400">
@@ -105,9 +107,9 @@ Performance with N = 70, dt = 0.01 s on a laptop CPU:
 
 | Stage | Mean | Min | Max |
 |-------|-------|-------|-------|
-| QP eval | **0.54 ms** | 0.45 ms | 3.35 ms |
-| QP solve | **0.63 ms** | 0.17 ms | 4.99 ms |
-| Total MPC | **1.18 ms** | 0.62 ms | **5.62 ms** |
+| QP eval | **0.93 ms** | 0.45 ms | 4.22 ms |
+| QP solve | **0.77 ms** | 0.17 ms | 4.99 ms |
+| Total MPC | **0.47 ms** | 0.29 ms | **2.69 ms** |
 
 ---
 
