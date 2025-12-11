@@ -422,6 +422,12 @@ def build_linear_constraints(system: SystemModel, constraints: SystemConstraints
     Aeq_fun, leq_fun, ueq_fun = build_linear_equality_constraints(system, N, dt, debug=debug)
     Aineq_fun, lineq_fun, uineq_fun = build_linear_inequality_constraints(system, constraints, N, debug=debug)
 
+    # --- Precompute constant lower bounds for inequalities: g(x,u) <= 0 ---
+    # They are always -inf, they do NOT depend on theta.
+    g_sym = constraints.constraints_symbolic()
+    nc = g_sym.shape[0]
+    lineq_const = -np.inf * np.ones(N * nc)
+
     def A_fun(theta: np.ndarray):
         """Return stacked A (eq + ineq) as dense ndarray."""
         Aeq_num   = np.asarray(Aeq_fun(theta),   dtype=float)
@@ -435,18 +441,21 @@ def build_linear_constraints(system: SystemModel, constraints: SystemConstraints
 
         return A
 
+
     def l_fun(theta: np.ndarray):
         """Return stacked l (eq + ineq)."""
-        leq_num   = np.asarray(leq_fun(theta),   dtype=float).reshape(-1)
-        lineq_num = np.asarray(lineq_fun(theta), dtype=float).reshape(-1)
-        l = np.hstack([leq_num, lineq_num])
+        leq_num = np.asarray(leq_fun(theta), dtype=float).reshape(-1)
+
+        # DO NOT call lineq_fun(theta) anymore – it's constant -inf.
+        l = np.hstack([leq_num, lineq_const])
 
         if debug:
             print("leq_num shape:", leq_num.shape)
-            print("lineq_num shape:", lineq_num.shape)
+            print("lineq_const shape:", lineq_const.shape)
             print("l (stacked) shape:", l.shape)
 
         return l
+
 
     def u_fun(theta: np.ndarray):
         """Return stacked u (eq + ineq)."""
@@ -460,7 +469,6 @@ def build_linear_constraints(system: SystemModel, constraints: SystemConstraints
             print("u (stacked) shape:", u.shape)
 
         return u
-
 
     return A_fun, l_fun, u_fun
 

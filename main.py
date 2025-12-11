@@ -93,7 +93,12 @@ def main():
         start_eQP_time = time.perf_counter()
 
         if i > 0:
-            update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun, A_row_idx, A_col_idx, P_row_idx, P_col_idx)
+            update_qp(
+        prob, x, X, U, N,
+        A_fun, l_fun, u_fun, P_fun, q_fun,
+        A_row_idx, A_col_idx, P_row_idx, P_col_idx,
+        debug_profile=(i < 20)  # print only first few steps
+    )
                       
         end_eQP_time = time.perf_counter()
 
