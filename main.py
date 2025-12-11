@@ -1,6 +1,5 @@
 # nav_mpc/main.py
 
-from scipy import sparse
 import numpy as np
 import osqp
 import time
@@ -25,8 +24,10 @@ def main():
     # Enable debugging & profiling
     debugging = False
     profiling = True
-    printing_per_step = False
     show_system_info = True
+
+    # Use Cython for speed in embedded systems (online functions ~5x times faster than pure Python)
+    use_cython = True
     
     # System, objective, constraints
     system      = SimplePendulumModel()
@@ -52,8 +53,16 @@ def main():
 
     print("Building QP...")
 
-    A_fun, l_fun, u_fun = build_linear_constraints(system, constraints, N, dt, debug=False)
+    start_bQP_time = time.perf_counter()
+
+    A_fun, l_fun, u_fun = build_linear_constraints(system, constraints, N, dt, use_cython, debug=False)
     P_fun, q_fun        = build_quadratic_objective(system, objective, N, debug=False)
+
+    end_bQP_time = time.perf_counter()
+    duration_seconds = end_bQP_time - start_bQP_time
+    minutes, seconds = divmod(duration_seconds, 60)
+
+    print(f"QP built in {int(minutes):02} minutes {int(seconds):02} seconds.")
 
 
     # -----------------------------------
@@ -93,12 +102,7 @@ def main():
         start_eQP_time = time.perf_counter()
 
         if i > 0:
-            update_qp(
-        prob, x, X, U, N,
-        A_fun, l_fun, u_fun, P_fun, q_fun,
-        A_row_idx, A_col_idx, P_row_idx, P_col_idx,
-        debug_profile=(i < 20)  # print only first few steps
-    )
+            update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun, A_row_idx, A_col_idx, P_row_idx, P_col_idx)
                       
         end_eQP_time = time.perf_counter()
 
@@ -128,7 +132,7 @@ def main():
         
         # 5) Profiling updates
         if profiling and i > 0:
-            update_timing_stats(printing=print_timing_summary, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
+            update_timing_stats(printing=False, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
 
     if profiling:
         print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, show_system_info=show_system_info)

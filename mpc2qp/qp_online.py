@@ -4,9 +4,6 @@ import numpy as np
 from scipy import sparse
 from typing import Callable, Tuple
 
-import time
-
-
 def shift_state_sequence(X: np.ndarray) -> np.ndarray:
     """
     Given previous optimal state sequence X of shape (N+1, nx),
@@ -151,43 +148,30 @@ def update_qp(
     A_row_idx: np.ndarray,
     A_col_idx: np.ndarray,
     P_row_idx: np.ndarray,
-    P_col_idx: np.ndarray,
-    debug_profile: bool = False,
+    P_col_idx: np.ndarray
 ) -> None:
+    
     # Shift linearization sequences
-    t0 = time.perf_counter()
     x_init    = x.copy()
     x_bar_seq = shift_state_sequence(X)  # (N+1, nx)
     u_bar_seq = shift_input_sequence(U)  # (N,   nu)
     theta = pack_args(x_init, x_bar_seq, u_bar_seq, N)
-    t1 = time.perf_counter()
 
     # --- A: dense, then sample nonzeros in CSC order ---
-    tA0 = time.perf_counter()
     A_dense = np.array(A_fun(theta), dtype=float)
     Ax_new = A_dense[A_row_idx, A_col_idx]
-    tA1 = time.perf_counter()
-
-    tL0 = time.perf_counter()
     l_new = np.array(l_fun(theta), dtype=float).reshape(-1)
     u_new = np.array(u_fun(theta), dtype=float).reshape(-1)
-    tL1 = time.perf_counter()
 
     # --- P: evaluate, ensure dense, then sample upper-tri entries ---
-    tP0 = time.perf_counter()
     P_raw_new = P_fun(theta)
     if sparse.isspmatrix(P_raw_new):
         P_dense_new = P_raw_new.toarray()
     else:
         P_dense_new = np.array(P_raw_new, dtype=float)
     Px_new = P_dense_new[P_row_idx, P_col_idx]
-    tP1 = time.perf_counter()
-
-    tQ0 = time.perf_counter()
     q_new = q_fun(theta).reshape(-1)
-    tQ1 = time.perf_counter()
 
-    tU0 = time.perf_counter()
     prob.update(
         Px=Px_new,
         Ax=Ax_new,
@@ -195,17 +179,6 @@ def update_qp(
         l=l_new,
         u=u_new,
     )
-    tU1 = time.perf_counter()
-
-    if debug_profile:
-        print(
-            f"pack: {(t1-t0)*1e3:6.3f} ms, "
-            f"A_fun: {(tA1-tA0)*1e3:6.3f} ms, "
-            f"l/u: {(tL1-tL0)*1e3:6.3f} ms, "
-            f"P_fun: {(tP1-tP0)*1e3:6.3f} ms, "
-            f"q_fun: {(tQ1-tQ0)*1e3:6.3f} ms, "
-            f"OSQP.update: {(tU1-tU0)*1e3:6.3f} ms"
-        )
 
 
 
