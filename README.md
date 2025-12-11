@@ -107,10 +107,12 @@ Performance with N = 70, dt = 0.01 s on a laptop CPU:
 
 | Stage | Mean | Min | Max |
 |-------|-------|-------|-------|
-| QP eval | 0.93 ms | 0.45 ms | 4.22 ms |
-| QP solve | 0.77 ms | 0.17 ms | 4.99 ms |
-| Total MPC | **0.47 ms** | **0.29 ms** | **2.69 ms** |
+| QP eval | 0.53 ms | 0.45 ms | 3.24 ms |
+| QP solve | 0.65 ms | 0.18 ms | 9.49 ms |
+| Total MPC | **1.17 ms** | **0.63 ms** | **9.96 ms** |
 
+Notice that Max time for Total MPC can stay deterministically below dt 
+while getting optimal performance from OSQP.
 ---
 
 ## 📄 License — MIT
