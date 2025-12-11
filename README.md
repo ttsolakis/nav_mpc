@@ -113,6 +113,7 @@ Performance with N = 70, dt = 0.01 s on a laptop CPU:
 
 Notice that Max time for Total MPC can stay deterministically below dt 
 while getting optimal performance from OSQP.
+
 ---
 
 ## 📄 License — MIT
