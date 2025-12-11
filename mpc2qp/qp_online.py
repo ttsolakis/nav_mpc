@@ -43,32 +43,59 @@ def shift_input_sequence(U: np.ndarray) -> np.ndarray:
     return U_bar
 
 
-def pack_args(
-    x0: np.ndarray,
-    x_bar_seq: np.ndarray,
-    u_bar_seq: np.ndarray,
-    N: int,
-) -> list:
-    """
-    Build argument list in the SAME order as used in build_linear_*:
+# def pack_args(
+#     x0: np.ndarray,
+#     x_bar_seq: np.ndarray,
+#     u_bar_seq: np.ndarray,
+#     N: int,
+# ) -> list:
+#     """
+#     Build argument list in the SAME order as used in build_linear_*:
 
-      [x0_0,...,x0_{nx-1},
-       xbar0_0,...,xbar0_{nx-1}, ubar0_0,...,ubar0_{nu-1},
-       ...,
-       xbar{N-1}_0,...,xbar{N-1}_{nx-1}, ubar{N-1}_0,...,ubar{N-1}_{nu-1}]
-    """
+#       [x0_0,...,x0_{nx-1},
+#        xbar0_0,...,xbar0_{nx-1}, ubar0_0,...,ubar0_{nu-1},
+#        ...,
+#        xbar{N-1}_0,...,xbar{N-1}_{nx-1}, ubar{N-1}_0,...,ubar{N-1}_{nu-1}]
+#     """
+#     nx = x0.shape[0]
+#     nu = u_bar_seq.shape[1] if N > 0 else 0
+
+#     args: list[float] = []
+
+#     # x0
+#     args.extend(np.asarray(x0).reshape(nx))
+
+#     # stages 0..N-1
+#     for k in range(N):
+#         args.extend(np.asarray(x_bar_seq[k]).reshape(nx))
+#         args.extend(np.asarray(u_bar_seq[k]).reshape(nu))
+
+#     return args
+
+def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: int) -> list:
     nx = x0.shape[0]
     nu = u_bar_seq.shape[1] if N > 0 else 0
 
-    args: list[float] = []
+    total_len = nx + N * (nx + nu)
+    args = [0.0] * total_len
+
+    idx = 0
 
     # x0
-    args.extend(np.asarray(x0).reshape(nx))
+    for j in range(nx):
+        args[idx] = float(x0[j])
+        idx += 1
 
-    # stages 0..N-1
+    # stages
     for k in range(N):
-        args.extend(np.asarray(x_bar_seq[k]).reshape(nx))
-        args.extend(np.asarray(u_bar_seq[k]).reshape(nu))
+        # x_bar_seq[k, :]
+        for j in range(nx):
+            args[idx] = float(x_bar_seq[k, j])
+            idx += 1
+        # u_bar_seq[k, :]
+        for j in range(nu):
+            args[idx] = float(u_bar_seq[k, j])
+            idx += 1
 
     return args
 
