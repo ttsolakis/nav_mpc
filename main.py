@@ -41,7 +41,7 @@ def main():
     # Horizon and sampling time
     N  = 70
     dt = 0.01
-    max_eval_qp = 0.005  # Max time it takes for QP evaluation (needs to be )
+    max_eval_qp = 0.005  # Max time it takes for QP evaluation (needs to be measured offline for setting OSQP time limit)
 
     # Simulation parameters
     nsim    = 300
