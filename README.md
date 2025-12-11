@@ -98,6 +98,8 @@ Subsequent runs use cached `.so` files and start immediately.
 ## 🧪 Example Output (Pendulum MPC)
 
 <img src="examples/simple_pendulum/pendulum_animation.gif" width="400">
+<img src="examples/simple_pendulum/state_trajectories.png" width="400">
+<img src="examples/simple_pendulum/input_trajectories.png" width="400">
 
 Performance with N = 70, dt = 0.01 s on a laptop CPU:
 

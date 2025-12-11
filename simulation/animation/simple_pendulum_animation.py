@@ -42,6 +42,13 @@ def animate_pendulum(
     save_gif : bool
         If True, also saves a GIF next to the MP4.
     """
+    # ---------------------------
+    #  Lightweight export config
+    # ---------------------------
+    TARGET_ANIM_FPS = 20.0   # visual FPS for exported video/GIF
+    VIDEO_DPI       = 100    # lower → smaller MP4
+    GIF_DPI         = 80     # lower → smaller GIF
+
     x_traj = np.asarray(x_traj)
     u_traj = np.asarray(u_traj).reshape(-1)
     t      = np.asarray(t)
@@ -84,14 +91,33 @@ def animate_pendulum(
         [np.atleast_1d(u_min), np.atleast_1d(u_max)]
     ))))
 
+    # ---------------------------
+    #  Downsample for animation
+    # ---------------------------
+    dt_sim   = float(t[1] - t[0])
+    sim_fps  = 1.0 / dt_sim
+    # at least stride 1, higher = fewer frames
+    frame_stride = max(1, int(round(sim_fps / TARGET_ANIM_FPS)))
+
+    frame_indices = np.arange(0, T, frame_stride)
+    # Make sure we include the final state
+    if frame_indices[-1] != T - 1:
+        frame_indices = np.append(frame_indices, T - 1)
+
+    t_anim      = t[frame_indices]
+    x_anim      = x_traj[frame_indices]
+    # u is defined between samples → ignore the last state index
+    u_anim      = u_traj[np.clip(frame_indices[:-1], 0, T - 2)]
+    T_anim      = x_anim.shape[0]
+
     # Precompute bob positions
-    theta = x_traj[:, 0]
+    theta = x_anim[:, 0]
     x_bob = l * np.sin(theta)
     y_bob = -l * np.cos(theta)
 
     # Setup figure: left = pendulum, right = torque bar
     fig, (ax_pend, ax_torque) = plt.subplots(
-        1, 2, figsize=(8, 4), gridspec_kw={"wspace": 0.4}
+        1, 2, figsize=(6, 3), gridspec_kw={"wspace": 0.4}
     )
     fig.suptitle("Pendulum MPC simulation")
 
@@ -138,13 +164,14 @@ def animate_pendulum(
         time_text.set_text("")
         return line, torque_rect, time_text
 
-    def update(frame):
-        xb = x_bob[frame]
-        yb = y_bob[frame]
+    def update(frame_idx):
+        k = frame_indices[frame_idx]
+        xb = x_bob[frame_idx]
+        yb = y_bob[frame_idx]
         line.set_data([0, xb], [0, yb])
 
-        if frame < T - 1:
-            u = u_traj[frame]
+        if frame_idx < T_anim - 1:
+            u = u_anim[frame_idx]
         else:
             u = 0.0
 
@@ -155,17 +182,17 @@ def animate_pendulum(
             torque_rect.set_y(max(-umax, u))
             torque_rect.set_height(-u)
 
-        time_text.set_text(f"t = {t[frame]:.2f} s")
+        time_text.set_text(f"t = {t_anim[frame_idx]:.2f} s")
 
         return line, torque_rect, time_text
 
     ani = FuncAnimation(
         fig,
         update,
-        frames=T,
+        frames=T_anim,
         init_func=init,
         blit=True,
-        interval=1000 * (t[1] - t[0]),
+        interval=1000.0 / TARGET_ANIM_FPS,
     )
 
     # ---------- Auto-save to <project_root>/results ----------
@@ -176,17 +203,17 @@ def animate_pendulum(
         save_path = results_dir / "pendulum_animation.mp4"
 
     save_path = Path(save_path)
-    fps = int(1.0 / (t[1] - t[0]))
+    video_fps = int(TARGET_ANIM_FPS)
 
-    # Save MP4
-    ani.save(save_path, fps=fps)
+    # Save MP4 (lower dpi to shrink resolution)
+    ani.save(save_path, fps=video_fps, dpi=VIDEO_DPI)
     print(f"[animator] Saved animation to {save_path}")
 
     # Optionally also save GIF
     if save_gif:
         gif_path = save_path.with_suffix(".gif")
-        writer = PillowWriter(fps=fps)
-        ani.save(gif_path, writer=writer)
+        writer = PillowWriter(fps=video_fps)
+        ani.save(gif_path, writer=writer, dpi=GIF_DPI)
         print(f"[animator] Saved GIF animation to {gif_path}")
 
     if show:
