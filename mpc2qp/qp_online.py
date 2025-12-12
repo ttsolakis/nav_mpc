@@ -1,4 +1,4 @@
-# nav_mpc/utils/qp_online.py
+# nav_mpc/qp_online.py
 
 import numpy as np
 from scipy import sparse

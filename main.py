@@ -5,7 +5,8 @@ import osqp
 import time
 
 # Import MPC2QP functionality, timing and plotting utilities (generic stuff)
-from mpc2qp import build_linear_constraints, build_quadratic_objective, set_qp, update_qp, extract_solution
+# from mpc2qp import build_linear_constraints, build_quadratic_objective, set_qp, update_qp, extract_solution
+from mpc2qp import build_qp_structures_fast, update_qp_fast, extract_solution
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
@@ -40,7 +41,7 @@ def main():
 
     # Horizon and sampling time
     N  = 100
-    dt = 0.01
+    dt = 0.02
 
     # Simulation parameters
     nsim    = 300
@@ -55,8 +56,18 @@ def main():
 
     start_bQP_time = time.perf_counter()
 
-    A_fun, l_fun, u_fun = build_linear_constraints(system, constraints, N, dt, use_cython, debug=False)
-    P_fun, q_fun        = build_quadratic_objective(system, objective, N, debug=False)
+    (P0, q0, A, l0, u0,
+        Ax_template, l_template, u_template,
+        idx_Ad, idx_Bd,
+        Ad_fun, Bd_fun, cd_fun) = build_qp_structures_fast(
+            system=system,
+            objective=objective,
+            constraints=constraints,
+            N=N,
+            dt=dt,
+            use_autowrap=True, 
+        )
+
 
     end_bQP_time = time.perf_counter()
     duration_seconds = end_bQP_time - start_bQP_time
@@ -92,8 +103,41 @@ def main():
 
     # Initialize OSQP solver
     prob = osqp.OSQP()
-    P, q, A, l, u, A_row_idx, A_col_idx, P_row_idx, P_col_idx = set_qp(x, x_bar_seq, u_bar_seq, N, A_fun, l_fun, u_fun, P_fun, q_fun)
-    prob.setup(P, q, A, l, u, warm_starting=True, verbose=False)
+    prob.setup(P0, q0, A, l0, u0, warm_starting=True, verbose=False)
+
+    # -----------------------------
+    # Preallocate update arrays (once)  ✅ MUST COME BEFORE WARMUP
+    # -----------------------------
+    Ax_new = A.data.copy()
+    l_new  = l0.copy()
+    u_new  = u0.copy()
+
+    # Preallocate scratch (once) — ✅ MUST COME BEFORE WARMUP
+    Xbar   = np.empty((N+1, nx), dtype=float)
+    Ubar   = np.empty((N,   nu), dtype=float)
+    Ad_all = np.empty((N, nx, nx), dtype=float)
+    Bd_all = np.empty((N, nx, nu), dtype=float)
+    cd_all = np.empty((N, nx), dtype=float)
+
+    update_timing = {"shift":0.0, "linearize":0.0, "fill":0.0, "osqp_update":0.0}
+
+    # -----------------------------
+    # Warmup numba compilation ✅ now variables exist
+    # -----------------------------
+    dummy_X = np.zeros((N+1, nx))
+    dummy_U = np.zeros((N,   nu))
+    update_qp_fast(
+        prob=prob, x=x, X=dummy_X, U=dummy_U,
+        Ax_new=Ax_new, l_new=l_new, u_new=u_new,
+        Xbar=Xbar, Ubar=Ubar, Ad_all=Ad_all, Bd_all=Bd_all, cd_all=cd_all,
+        Ax_template=Ax_template, l_template=l_template, u_template=u_template,
+        idx_Ad=idx_Ad, idx_Bd=idx_Bd,
+        Ad_fun=Ad_fun, Bd_fun=Bd_fun, cd_fun=cd_fun,
+        N=N, nx=nx, nu=nu,
+        timing=None
+    )
+
+    update_timing = {"shift":0.0, "linearize":0.0, "fill":0.0, "osqp_update":0.0}
 
     print("Running main loop...")
     for i in range(nsim):
@@ -102,7 +146,32 @@ def main():
         start_eQP_time = time.perf_counter()
 
         if i > 0:
-            update_qp(prob, x, X, U, N, A_fun, l_fun, u_fun, P_fun, q_fun, A_row_idx, A_col_idx, P_row_idx, P_col_idx)
+            update_qp_fast(
+                prob=prob,
+                x=x,
+                X=X,
+                U=U,
+                Ax_new=Ax_new,
+                l_new=l_new,
+                u_new=u_new,
+                Xbar=Xbar,
+                Ubar=Ubar,
+                Ad_all=Ad_all,
+                Bd_all=Bd_all,
+                cd_all=cd_all,
+                Ax_template=Ax_template,
+                l_template=l_template,
+                u_template=u_template,
+                idx_Ad=idx_Ad,
+                idx_Bd=idx_Bd,
+                Ad_fun=Ad_fun,
+                Bd_fun=Bd_fun,
+                cd_fun=cd_fun,
+                N=N,
+                nx=nx,
+                nu=nu,
+                timing=update_timing,   # NEW
+            )
                       
         end_eQP_time = time.perf_counter()
 
@@ -139,6 +208,12 @@ def main():
 
     if profiling:
         print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, show_system_info=show_system_info)
+
+
+    total_updates = nsim - 1
+    print("\n=== update_qp_fast micro-timing (avg per call) ===")
+    for k,v in update_timing.items():
+        print(f"{k:>12s}: {1e3*v/total_updates:8.3f} ms")
 
     # ----------------------------------------
     # ------------ Plot & Animate ------------
