@@ -11,10 +11,10 @@ from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 
 # Import system, objective, constraints and animation (user-defined for the specific problem)
-from models.simple_pendulum_model import SimplePendulumModel
-from objectives.simple_pendulum_objective import SimplePendulumObjective
-from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints
-from simulation.animation.simple_pendulum_animation import animate_pendulum
+from models.double_pendulum_model import DoublePendulumModel
+from objectives.double_pendulum_objective import DoublePendulumObjective
+from constraints.system_constraints.double_pendulum_sys_constraints import DoublePendulumSystemConstraints
+from simulation.animation.double_pendulum_animation import animate_double_pendulum
 
 def main():
     # -----------------------------------
@@ -27,19 +27,19 @@ def main():
     show_system_info = True
 
     # Use Cython for speed in embedded systems (online functions ~5x times faster than pure Python)
-    use_cython = True
+    use_cython = False
     
     # System, objective, constraints
-    system      = SimplePendulumModel()
-    objective   = SimplePendulumObjective(system)
-    constraints = SimplePendulumSystemConstraints(system)
+    system      = DoublePendulumModel()
+    objective   = DoublePendulumObjective(system)
+    constraints = DoublePendulumSystemConstraints(system)
     
     # Initial and reference states
-    x_init = np.array([0.0, 0.0])
-    x_ref  = np.array([np.pi, 0.0])
+    x_init = np.array([0.0, 0.0, 0.0, 0.0])
+    x_ref  = np.array([np.pi, np.pi, 0.0, 0.0])
 
     # Horizon and sampling time
-    N  = 70
+    N  = 100
     dt = 0.01
 
     # Simulation parameters
@@ -109,8 +109,9 @@ def main():
         # 2) Solve current QP and extract solution
         start_opt_time = time.perf_counter()
 
-        osqp_time_limit = dt-(end_eQP_time-start_eQP_time)  # Solver has this much time to solve within a control cycle
-        prob.update_settings(time_limit=osqp_time_limit)  
+        if use_cython:
+            osqp_time_limit = dt-(end_eQP_time-start_eQP_time)  # Solver has this much time to solve within a control cycle
+            prob.update_settings(time_limit=osqp_time_limit)  
         res = prob.solve()
         if res.info.status not in ["solved", "solved inaccurate"]: raise ValueError(f"OSQP did not solve the problem at step {i}! Status: {res.info.status}")
         X, U = extract_solution(res, nx, nu, N)
@@ -152,7 +153,7 @@ def main():
     plot_state_input_trajectories(system, constraints, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
 
     print("Animating and saving...")
-    animate_pendulum(system, constraints, total_time, x_traj, u_traj, show=False, save_gif=True)
+    animate_double_pendulum(system, constraints, total_time, x_traj, u_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()
