@@ -15,7 +15,7 @@ from objectives.objectives import Objective
 from constraints.sys_constraints import SystemConstraints
 
 @dataclass(frozen=True, slots=True)
-class QPStructuresFast:
+class QPStructures:
 
     # OSQP base problem
     P0: sparse.csc_matrix
@@ -232,7 +232,7 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
 
         g(x_k, u_k) ≤ 0,   g ∈ ℝ^{nc}
 
-    Online (in update_qp_fast), we linearize around (x̄_k, ū_k):
+    Online (in update_qp), we linearize around (x̄_k, ū_k):
 
         g(x,u) ≈ g₀ + Gx (x − x̄) + Gu (u − ū) ≤ 0
 
@@ -462,7 +462,7 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
     l0 = l_template.copy()
     u0 = u_template.copy()
 
-    return QPStructuresFast(
+    return QPStructures(
         P0=P0, q0=q0, A=A, l0=l0, u0=u0,
         Ax_template=Ax_template, l_template=l_template, u_template=u_template,
         idx_Ad=idx_Ad, idx_Bd=idx_Bd, idx_Gx=idx_Gx, idx_Gu=idx_Gu,
