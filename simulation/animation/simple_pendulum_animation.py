@@ -1,78 +1,57 @@
 # nav_mpc/simulation/animation/simple_pendulum_animation.py
 
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Tuple
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Rectangle
-from pathlib import Path
 
 from models.simple_pendulum_model import SimplePendulumModel
 
 
-def animate_pendulum(
-    system: SimplePendulumModel,
-    constraints: object | None,
-    t: np.ndarray,
-    x_traj: np.ndarray,
-    u_traj: np.ndarray,
-    save_path: str | Path | None = None,
-    show: bool = False,
-    save_gif: bool = False,
-):
+def _resolve_results_dir(save_path: str | Path | None) -> Tuple[Path, Path]:
     """
-    Animate simple pendulum motion + torque bar.
+    Returns (results_dir, mp4_path).
 
-    Parameters
-    ----------
-    system : SimplePendulumModel
-        Provides pendulum length (system.l).
-    constraints : object or None
-        If not None and has get_bounds(), used to infer input bounds
-        (u_min, u_max) for scaling the torque bar.
-    t : (T,)
-        Time stamps for x_traj (assumed uniform).
-    x_traj : (T, 2)
-        State trajectory, x[:,0] = theta, x[:,1] = theta_dot.
-    u_traj : (T-1, 1) or (T-1,)
-        Control inputs applied between samples.
-    save_path : str or Path, optional
-        If None, saves to '<project_root>/results/pendulum_animation.mp4'.
-    show : bool
-        Whether to plt.show() the animation.
-    save_gif : bool
-        If True, also saves a GIF next to the MP4.
+    If save_path is None:
+        <project_root>/results/pendulum_animation.mp4
+    If save_path is a directory:
+        <save_path>/pendulum_animation.mp4
+    If save_path is a file:
+        that exact file path (and results_dir = parent)
     """
-    # ---------------------------
-    #  Lightweight export config
-    # ---------------------------
-    TARGET_ANIM_FPS = 20.0   # visual FPS for exported video/GIF
-    VIDEO_DPI       = 100    # lower → smaller MP4
-    GIF_DPI         = 80     # lower → smaller GIF
+    if save_path is None:
+        project_root = Path(__file__).resolve().parents[2]
+        results_dir = project_root / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        return results_dir, results_dir / "pendulum_animation.mp4"
 
-    x_traj = np.asarray(x_traj)
-    u_traj = np.asarray(u_traj).reshape(-1)
-    t      = np.asarray(t)
+    save_path = Path(save_path)
+    if save_path.is_dir():
+        results_dir = save_path
+        results_dir.mkdir(parents=True, exist_ok=True)
+        return results_dir, results_dir / "pendulum_animation.mp4"
 
-    T = x_traj.shape[0]
-    assert x_traj.shape[1] == 2, "SimplePendulumModel assumed to have 2 states."
-    assert u_traj.shape[0] == T - 1, "Expect u_traj length = len(x_traj)-1."
+    results_dir = save_path.parent
+    results_dir.mkdir(parents=True, exist_ok=True)
+    return results_dir, save_path
 
-    l = system.l
 
-    # -------- Infer u_min, u_max from constraints/system --------
+def _infer_input_bounds(system: SimplePendulumModel, constraints: object | None) -> Tuple[np.ndarray, np.ndarray]:
     u_min = None
     u_max = None
 
-    # 1) constraints.get_bounds() if available
     if constraints is not None and hasattr(constraints, "get_bounds"):
         bounds = constraints.get_bounds()
-        # expected: (x_min, x_max, u_min, u_max)
         if len(bounds) == 4:
             _, _, u_min_c, u_max_c = bounds
             u_min = np.asarray(u_min_c)
             u_max = np.asarray(u_max_c)
 
-    # 2) fall back to system attributes if still None
     if u_min is None or u_max is None:
         u_min_attr = getattr(system, "u_min", None) or getattr(system, "umin", None)
         u_max_attr = getattr(system, "u_max", None) or getattr(system, "umax", None)
@@ -82,43 +61,119 @@ def animate_pendulum(
 
     if u_min is None or u_max is None:
         raise ValueError(
-            "Could not infer input bounds: constraints.get_bounds() did not "
-            "return u_min/u_max and system has no u_min/u_max attributes."
+            "Could not infer input bounds. Provide constraints.get_bounds() -> "
+            "(x_min,x_max,u_min,u_max) or set system.u_min/u_max."
         )
 
-    # We assume scalar input for the pendulum; if vector, take the worst-case
-    umax = float(np.max(np.abs(np.concatenate(
-        [np.atleast_1d(u_min), np.atleast_1d(u_max)]
-    ))))
+    return u_min, u_max
+
+
+def animate_pendulum(
+    system: SimplePendulumModel,
+    constraints: object | None,
+    dt: float,
+    x_traj: list[np.ndarray] | np.ndarray,
+    u_traj: list[np.ndarray] | np.ndarray,
+    save_path: str | Path | None = None,
+    show: bool = False,
+    save_gif: bool = False,
+):
+    """
+    Animate simple pendulum motion + torque bar.
+
+    This version accepts dt + trajectories and builds time vector internally.
+
+    Parameters
+    ----------
+    system : SimplePendulumModel
+        Provides pendulum length (system.l).
+    constraints : object or None
+        If not None and has get_bounds(), used to infer input bounds (u_min, u_max).
+    dt : float
+        Sampling time [s]. Used to build t.
+    x_traj : list of (2,) or (T,2)
+        State trajectory: [theta, theta_dot].
+    u_traj : list of (nu,) or (T-1,nu)
+        Inputs applied between samples. Only u[:,0] is visualized as torque bar.
+    save_path : str | Path, optional
+        None -> <project_root>/results/pendulum_animation.mp4
+        dir  -> <dir>/pendulum_animation.mp4
+        file -> saved exactly there
+    show : bool
+        Whether to show the animation.
+    save_gif : bool
+        If True, also saves a GIF next to the MP4.
+    """
+    # ---------------------------
+    #  Lightweight export config
+    # ---------------------------
+    TARGET_ANIM_FPS = 20.0
+    VIDEO_DPI = 100
+    GIF_DPI = 80
+
+    # ---------------------------
+    #  Stack trajectories
+    # ---------------------------
+    x_arr = np.vstack(x_traj) if isinstance(x_traj, list) else np.asarray(x_traj)
+    u_arr = np.vstack(u_traj) if isinstance(u_traj, list) else np.asarray(u_traj)
+
+    if x_arr.ndim != 2 or x_arr.shape[1] != 2:
+        raise ValueError(f"Expected x_traj shape (T,2), got {x_arr.shape}")
+
+    # allow (T-1,) or (T-1,1) or (T-1,nu)
+    if u_arr.ndim == 1:
+        u_arr = u_arr.reshape(-1, 1)
+    elif u_arr.ndim != 2:
+        raise ValueError(f"Expected u_traj shape (T-1,nu) or (T-1,), got {u_arr.shape}")
+
+    T = x_arr.shape[0]
+    if u_arr.shape[0] != T - 1:
+        raise ValueError(f"Expected u_traj length T-1={T-1}, got {u_arr.shape[0]}")
+
+    # build time
+    t = dt * np.arange(T, dtype=float)
+
+    l = float(system.l)
+
+    # -------- Infer u_min, u_max --------
+    u_min, u_max = _infer_input_bounds(system, constraints)
+
+    umax = float(
+        np.max(
+            np.abs(
+                np.concatenate([np.atleast_1d(u_min).astype(float), np.atleast_1d(u_max).astype(float)])
+            )
+        )
+    )
+    if umax <= 0.0 or not np.isfinite(umax):
+        umax = 1.0
 
     # ---------------------------
     #  Downsample for animation
     # ---------------------------
-    dt_sim   = float(t[1] - t[0])
-    sim_fps  = 1.0 / dt_sim
-    # at least stride 1, higher = fewer frames
+    sim_fps = 1.0 / float(dt)
     frame_stride = max(1, int(round(sim_fps / TARGET_ANIM_FPS)))
 
     frame_indices = np.arange(0, T, frame_stride)
-    # Make sure we include the final state
     if frame_indices[-1] != T - 1:
         frame_indices = np.append(frame_indices, T - 1)
 
-    t_anim      = t[frame_indices]
-    x_anim      = x_traj[frame_indices]
-    # u is defined between samples → ignore the last state index
-    u_anim      = u_traj[np.clip(frame_indices[:-1], 0, T - 2)]
-    T_anim      = x_anim.shape[0]
+    t_anim = t[frame_indices]
+    x_anim = x_arr[frame_indices]
+    u_anim = u_arr[np.clip(frame_indices[:-1], 0, T - 2), 0].astype(float)  # visualize first input
+    T_anim = x_anim.shape[0]
 
-    # Precompute bob positions
+    # ---------------------------
+    #  Precompute bob positions
+    # ---------------------------
     theta = x_anim[:, 0]
     x_bob = l * np.sin(theta)
     y_bob = -l * np.cos(theta)
 
-    # Setup figure: left = pendulum, right = torque bar
-    fig, (ax_pend, ax_torque) = plt.subplots(
-        1, 2, figsize=(6, 3), gridspec_kw={"wspace": 0.4}
-    )
+    # ---------------------------
+    #  Figure / axes
+    # ---------------------------
+    fig, (ax_pend, ax_torque) = plt.subplots(1, 2, figsize=(6, 3), gridspec_kw={"wspace": 0.4})
     fig.suptitle("Pendulum MPC simulation")
 
     # --- Pendulum axis ---
@@ -141,20 +196,13 @@ def animate_pendulum(
     ax_torque.set_ylabel("Torque u [Nm]", labelpad=8)
     ax_torque.axhline(0.0, color="k", linewidth=0.8)
 
-    # (Optional) draw u_min / u_max as dashed lines for reference
     if np.isfinite(u_min).all():
-        ax_torque.axhline(float(np.atleast_1d(u_min).min()),
-                          linestyle="--", linewidth=1.0, color="k", alpha=0.3)
+        ax_torque.axhline(float(np.atleast_1d(u_min).min()), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
     if np.isfinite(u_max).all():
-        ax_torque.axhline(float(np.atleast_1d(u_max).max()),
-                          linestyle="--", linewidth=1.0, color="k", alpha=0.3)
+        ax_torque.axhline(float(np.atleast_1d(u_max).max()), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
 
     bar_width = 0.6
-    torque_rect = Rectangle(
-        (0.2, 0.0),  # bottom-left
-        bar_width,
-        0.0,         # height updated in animation
-    )
+    torque_rect = Rectangle((0.2, 0.0), bar_width, 0.0)
     ax_torque.add_patch(torque_rect)
 
     def init():
@@ -164,26 +212,21 @@ def animate_pendulum(
         time_text.set_text("")
         return line, torque_rect, time_text
 
-    def update(frame_idx):
-        k = frame_indices[frame_idx]
-        xb = x_bob[frame_idx]
-        yb = y_bob[frame_idx]
-        line.set_data([0, xb], [0, yb])
+    def update(frame_idx: int):
+        xb = float(x_bob[frame_idx])
+        yb = float(y_bob[frame_idx])
+        line.set_data([0.0, xb], [0.0, yb])
 
-        if frame_idx < T_anim - 1:
-            u = u_anim[frame_idx]
-        else:
-            u = 0.0
+        uu = float(u_anim[frame_idx]) if frame_idx < T_anim - 1 else 0.0
 
-        if u >= 0:
+        if uu >= 0.0:
             torque_rect.set_y(0.0)
-            torque_rect.set_height(min(u, umax))
+            torque_rect.set_height(min(uu, umax))
         else:
-            torque_rect.set_y(max(-umax, u))
-            torque_rect.set_height(-u)
+            torque_rect.set_y(max(-umax, uu))
+            torque_rect.set_height(-uu)
 
         time_text.set_text(f"t = {t_anim[frame_idx]:.2f} s")
-
         return line, torque_rect, time_text
 
     ani = FuncAnimation(
@@ -195,23 +238,17 @@ def animate_pendulum(
         interval=1000.0 / TARGET_ANIM_FPS,
     )
 
-    # ---------- Auto-save to <project_root>/results ----------
-    if save_path is None:
-        project_root = Path(__file__).resolve().parents[2]
-        results_dir = project_root / "results"
-        results_dir.mkdir(exist_ok=True)
-        save_path = results_dir / "pendulum_animation.mp4"
-
-    save_path = Path(save_path)
+    # ---------------------------
+    #  Save outputs
+    # ---------------------------
+    results_dir, mp4_path = _resolve_results_dir(save_path)
     video_fps = int(TARGET_ANIM_FPS)
 
-    # Save MP4 (lower dpi to shrink resolution)
-    ani.save(save_path, fps=video_fps, dpi=VIDEO_DPI)
-    print(f"[animator] Saved animation to {save_path}")
+    ani.save(mp4_path, fps=video_fps, dpi=VIDEO_DPI)
+    print(f"[animator] Saved animation to {mp4_path}")
 
-    # Optionally also save GIF
     if save_gif:
-        gif_path = save_path.with_suffix(".gif")
+        gif_path = mp4_path.with_suffix(".gif")
         writer = PillowWriter(fps=video_fps)
         ani.save(gif_path, writer=writer, dpi=GIF_DPI)
         print(f"[animator] Saved GIF animation to {gif_path}")

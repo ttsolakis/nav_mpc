@@ -15,7 +15,6 @@ from models.double_pendulum_model import DoublePendulumModel
 from objectives.double_pendulum_objective import DoublePendulumObjective
 from constraints.system_constraints.double_pendulum_sys_constraints import DoublePendulumSystemConstraints
 from simulation.animation.double_pendulum_animation import animate_double_pendulum
-
 def main():
     # -----------------------------------
     # ---------- Problem Setup ----------
@@ -39,7 +38,7 @@ def main():
     x_ref  = np.array([np.pi, np.pi, 0.0, 0.0])
 
     # Horizon, sampling time
-    N  = 100  # Steps
+    N  = 40   # Steps
     dt = 0.02 # seconds
 
     # Simulation parameters
@@ -61,7 +60,6 @@ def main():
     end_bQP_time = time.perf_counter()
     
     print(f"QP built in {int(divmod(end_bQP_time - start_bQP_time, 60)[0]):02} minutes {int(divmod(end_bQP_time - start_bQP_time, 60)[1]):02} seconds.")
-
 
     # -----------------------------------
     # ------------ Main Loop ------------

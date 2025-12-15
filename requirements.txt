@@ -1,8 +1,9 @@
 numpy
 scipy
 sympy
-osqp
+numba
 cython
 matplotlib
+osqp
 
 
