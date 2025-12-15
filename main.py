@@ -43,7 +43,7 @@ def main():
     dt = 0.02 # seconds
 
     # Simulation parameters
-    tsim    = 6.0  # seconds
+    tsim    = 3.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -148,15 +148,10 @@ def main():
     # ---------------------------------------- 
 
     print("Plotting and saving...")
-    x_traj = np.vstack(x_traj)       # (nsim+1, nx)
-    u_traj = np.vstack(u_traj)       # (nsim,   nu)
-    total_time = dt * np.arange(x_traj.shape[0])  # length nsim+1
-
-    # Plot state and input trajectories (generic, uses constraints internally)
-    plot_state_input_trajectories(system, constraints, total_time, x_traj, u_traj, x_ref=x_ref, show=False)
+    plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_ref, show=False)
 
     print("Animating and saving...")
-    animate_double_pendulum(system, constraints, total_time, x_traj, u_traj, show=False, save_gif=True)
+    animate_double_pendulum(system, constraints, dt, x_traj, u_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()
