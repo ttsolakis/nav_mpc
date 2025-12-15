@@ -6,7 +6,7 @@ import time
 
 # Import MPC2QP functionality, timing and plotting utilities (generic stuff)
 # from mpc2qp import build_linear_constraints, build_quadratic_objective, set_qp, update_qp, extract_solution
-from mpc2qp import build_qp_structures_fast, update_qp_fast, extract_solution
+from mpc2qp import build_qp, update_qp_fast, extract_solution
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
@@ -56,23 +56,13 @@ def main():
 
     start_bQP_time = time.perf_counter()
 
-    (P0, q0, A, l0, u0,
-        Ax_template, l_template, u_template,
-        idx_Ad, idx_Bd,
-        Ad_fun, Bd_fun, cd_fun) = build_qp_structures_fast(
-            system=system,
-            objective=objective,
-            constraints=constraints,
-            N=N,
-            dt=dt,
-            use_autowrap=True, 
-        )
-
+    # QP matrices and vectors have a standard structure and sparsity. So:
+    # Build everything that is constant once, and prepare the exact memory addresses where the time-varying numbers will be written later.”
+    qp = build_qp(system=system, objective=objective, constraints=constraints, N=N, dt=dt)
 
     end_bQP_time = time.perf_counter()
     duration_seconds = end_bQP_time - start_bQP_time
     minutes, seconds = divmod(duration_seconds, 60)
-
     print(f"QP built in {int(minutes):02} minutes {int(seconds):02} seconds.")
 
 
@@ -92,14 +82,6 @@ def main():
 
     # Initial state
     x = x_init.copy()
-
-    # Initialize nominal trajectories
-    x_bar_seq = np.zeros((N + 1, nx))
-    u_bar_seq = np.zeros((N,     nu))
-
-    # Store trajectories for plotting / animation
-    x_traj = [x.copy()]   
-    u_traj = [] 
 
     # Initialize OSQP solver
     prob = osqp.OSQP()
@@ -138,6 +120,10 @@ def main():
     )
 
     update_timing = {"shift":0.0, "linearize":0.0, "fill":0.0, "osqp_update":0.0}
+
+    # Store trajectories for plotting / animation
+    x_traj = [x.copy()]   
+    u_traj = [] 
 
     print("Running main loop...")
     for i in range(nsim):
