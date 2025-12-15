@@ -104,6 +104,7 @@ Machine:  x86_64
 CPU:      Intel(R) Core(TM) i7-7500U CPU @ 2.70GHz  
 Cores:    4 logical
 
+---
 
 ### Simple Pendulum
 

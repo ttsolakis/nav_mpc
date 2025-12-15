@@ -11,10 +11,10 @@ from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 
 # Import system, objective, constraints and animation (user-defined for the specific problem)
-from models.double_pendulum_model import DoublePendulumModel
-from objectives.double_pendulum_objective import DoublePendulumObjective
-from constraints.system_constraints.double_pendulum_sys_constraints import DoublePendulumSystemConstraints
-from simulation.animation.double_pendulum_animation import animate_double_pendulum
+from models.simple_pendulum_model import SimplePendulumModel
+from objectives.simple_pendulum_objective import SimplePendulumObjective
+from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints
+from simulation.animation.simple_pendulum_animation import animate_pendulum
 def main():
     # -----------------------------------
     # ---------- Problem Setup ----------
@@ -29,20 +29,20 @@ def main():
     embedded = True
     
     # System, objective, constraints
-    system      = DoublePendulumModel()
-    objective   = DoublePendulumObjective(system)
-    constraints = DoublePendulumSystemConstraints(system)
+    system      = SimplePendulumModel()
+    objective   = SimplePendulumObjective(system)
+    constraints = SimplePendulumSystemConstraints(system)
     
     # Initial and reference states
-    x_init = np.array([0.0, 0.0, 0.0, 0.0])
-    x_ref  = np.array([np.pi, np.pi, 0.0, 0.0])
+    x_init = np.array([0.0, 0.0])
+    x_ref  = np.array([np.pi, 0.0])
 
     # Horizon, sampling time
     N  = 40   # Steps
     dt = 0.02 # seconds
 
     # Simulation parameters
-    tsim    = 3.0  # seconds
+    tsim    = 2.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -149,7 +149,7 @@ def main():
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_ref, show=False)
 
     print("Animating and saving...")
-    animate_double_pendulum(system, constraints, dt, x_traj, u_traj, show=False, save_gif=True)
+    animate_pendulum(system, constraints, dt, x_traj, u_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()
