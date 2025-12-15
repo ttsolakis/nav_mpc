@@ -88,7 +88,7 @@ def main():
     ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A.data, l0=qp.l0, u0=qp.u0)
     X = np.zeros((N+1, nx))
     U = np.zeros((N,   nu))
-    update_qp(prob, x, X, U, qp, ws)
+    update_qp(prob, x, X, U, qp, ws)  
     
     # Store trajectories for plotting / animation
     x_traj = [x.copy()]   
@@ -105,8 +105,7 @@ def main():
         # 1) Evaluate QP around new (x0, x̄, ū)
         start_eQP_time = time.perf_counter()
 
-        if i > 0:
-            update_qp(prob, x, X, U, qp, ws)
+        update_qp(prob, x, X, U, qp, ws)
                       
         end_eQP_time = time.perf_counter()
 
