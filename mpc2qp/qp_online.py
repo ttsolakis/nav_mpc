@@ -1,191 +1,272 @@
-# nav_mpc/qp_online.py
+# nav_mpc/mpc2qp/qp_online.py
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Tuple
 
 import numpy as np
-from scipy import sparse
-from typing import Callable, Tuple
-
-def shift_state_sequence(X: np.ndarray) -> np.ndarray:
-    """
-    Given previous optimal state sequence X of shape (N+1, nx),
-    build a shifted linearization sequence X_bar of shape (N+1, nx):
-
-        X_bar[k] = X[k+1]          for k = 0..N-1   (shift forward)
-        X_bar[N] = 2*X[N] - X[N-1] (linear extrapolation for the last one)
-    """
-    X = np.asarray(X)
-    X_bar = np.empty_like(X)
-
-    # shift all but last
-    X_bar[:-1, :] = X[1:, :]
-
-    # extrapolate terminal
-    X_bar[-1, :] = 2.0 * X[-1, :] - X[-2, :]
-
-    return X_bar
+from numba import njit
 
 
-def shift_input_sequence(U: np.ndarray) -> np.ndarray:
-    """
-    Given previous optimal input sequence U of shape (N, nu),
-    build shifted U_bar of shape (N, nu):
+# ============================================================
+# Workspace (preallocated buffers to avoid per-step allocations)
+# ============================================================
 
-        U_bar[k]   = U[k+1]  for k = 0..N-2
-        U_bar[N-1] = U[N-1]  (hold last input)
-    """
-    U = np.asarray(U)
-    if U.shape[0] == 0:
-        return U
+@dataclass(slots=True)
+class QPWorkspace:
+    Ax_new: np.ndarray
+    l_new: np.ndarray
+    u_new: np.ndarray
 
-    U_bar = np.empty_like(U)
-    U_bar[:-1, :] = U[1:, :]
-    U_bar[-1, :] = U[-1, :]
-    return U_bar
+    Xbar: np.ndarray
+    Ubar: np.ndarray
 
+    Ad_all: np.ndarray
+    Bd_all: np.ndarray
+    cd_all: np.ndarray
 
-def pack_args(x0: np.ndarray, x_bar_seq: np.ndarray, u_bar_seq: np.ndarray, N: int) -> np.ndarray:
-    """
-    Flatten (x0, X_bar, U_bar) into a 1D array in the SAME order used
-    in the SymPy constructions:
-
-      [x0_0,...,x0_{nx-1},
-       xbar0_0,...,xbar0_{nx-1}, ubar0_0,...,ubar0_{nu-1},
-       ...,
-       xbar{N-1}_0,...,xbar{N-1}_{nx-1}, ubar{N-1}_0,...,ubar{N-1}_{nu-1}]
-    """
-    nx = x0.shape[0]
-    nu = u_bar_seq.shape[1] if N > 0 else 0
-
-    total_len = nx + N * (nx + nu)
-    theta = np.empty(total_len, dtype=float)
-
-    idx = 0
-
-    # x0
-    for j in range(nx):
-        theta[idx] = float(x0[j])
-        idx += 1
-
-    # stages
-    for k in range(N):
-        # x_bar_seq[k, :]
-        for j in range(nx):
-            theta[idx] = float(x_bar_seq[k, j])
-            idx += 1
-        # u_bar_seq[k, :]
-        for j in range(nu):
-            theta[idx] = float(u_bar_seq[k, j])
-            idx += 1
-
-    return theta
+    Gx_all: np.ndarray
+    Gu_all: np.ndarray
+    rhs_all: np.ndarray
 
 
-def set_qp(
-    x0: np.ndarray,
-    X_bar: np.ndarray,
-    U_bar: np.ndarray,
+def make_workspace(
     N: int,
-    A_fun,
-    l_fun,
-    u_fun,
-    P_fun,
-    q_fun,
-):
+    nx: int,
+    nu: int,
+    nc: int,
+    A_data: np.ndarray,
+    l0: np.ndarray,
+    u0: np.ndarray,
+) -> QPWorkspace:
     """
-    Build full QP matrices (P, q, A, l, u) for a given (x0, X̄, Ū),
-    and precompute the sparsity patterns of A and P (upper triangle)
-    for fast updates later.
+    Allocate all scratch buffers once.
+
+    Notes:
+    - A_data should be qp.A.data (CSC data array). We keep a private copy for updates.
+    - l0/u0 are copied to private arrays that we overwrite each step.
     """
-    theta = pack_args(x0, X_bar, U_bar, N)
+    return QPWorkspace(
+        Ax_new=A_data.copy(),
+        l_new=l0.copy(),
+        u_new=u0.copy(),
+        Xbar=np.empty((N + 1, nx), dtype=float),
+        Ubar=np.empty((N, nu), dtype=float),
+        Ad_all=np.empty((N, nx, nx), dtype=float),
+        Bd_all=np.empty((N, nx, nu), dtype=float),
+        cd_all=np.empty((N, nx), dtype=float),
+        Gx_all=np.empty((N, nc, nx), dtype=float),
+        Gu_all=np.empty((N, nc, nu), dtype=float),
+        rhs_all=np.empty((N, nc), dtype=float),
+    )
 
-    # ---- A: dense once, sparse CSC for OSQP setup ----
-    A_dense = np.array(A_fun(theta), dtype=float)
-    A = sparse.csc_matrix(A_dense)
 
-    l = np.array(l_fun(theta), dtype=float).reshape(-1)
-    u = np.array(u_fun(theta), dtype=float).reshape(-1)
+# ==========================
+# Small utility functionality
+# ==========================
 
-    # ---- P: first evaluation (P_fun returns sparse) ----
-    P_raw0 = P_fun(theta)
-    if sparse.isspmatrix(P_raw0):
-        P_full0 = P_raw0.tocsc()
-    else:
-        P_dense0 = np.array(P_raw0, dtype=float)
-        P_full0 = sparse.csc_matrix(P_dense0)
+def shift_state_sequence_inplace(X: np.ndarray, Xbar_out: np.ndarray) -> None:
+    """
+    X: (N+1, nx)  -> Xbar_out: (N+1, nx)
+    Xbar[k] = X[k+1] for k=0..N-1
+    Xbar[N] = 2*X[N] - X[N-1]
+    """
+    Xbar_out[:-1, :] = X[1:, :]
+    Xbar_out[-1, :] = 2.0 * X[-1, :] - X[-2, :]
 
-    P0 = sparse.triu(P_full0).tocsc()
 
-    q = q_fun(theta).reshape(-1)
+def shift_input_sequence_inplace(U: np.ndarray, Ubar_out: np.ndarray) -> None:
+    """
+    U: (N, nu) -> Ubar_out: (N, nu)
+    Ubar[k] = U[k+1] for k=0..N-2
+    Ubar[N-1] = U[N-1]
+    """
+    Ubar_out[:-1, :] = U[1:, :]
+    Ubar_out[-1, :] = U[-1, :]
 
-    # ---- A sparsity pattern (CSC order) ----
-    n_cols_A = A.shape[1]
-    A_row_idx = A.indices.copy()
-    A_col_idx = np.empty_like(A_row_idx)
-    for j in range(n_cols_A):
-        start = A.indptr[j]
-        end = A.indptr[j + 1]
-        A_col_idx[start:end] = j
 
-    # ---- P sparsity pattern (upper triangle) ----
-    P0_coo = P0.tocoo()
-    P_row_idx = P0_coo.row
-    P_col_idx = P0_coo.col
+def extract_solution(res, nx: int, nu: int, N: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    OSQP solution z = [x0..xN, u0..u(N-1)].
+    Returns X: (N+1, nx), U: (N, nu)
+    """
+    z = res.x
+    X_flat = z[0 : (N + 1) * nx]
+    U_flat = z[(N + 1) * nx :]
+    X = X_flat.reshape(N + 1, nx)
+    U = U_flat.reshape(N, nu)
+    return X, U
 
-    # Return P0 (upper triangular), plus patterns
-    return P0, q, A, l, u, A_row_idx, A_col_idx, P_row_idx, P_col_idx
 
+# ==========================
+# Numba fast fill (in-place)
+# ==========================
+
+@njit(cache=True)
+def _fill_qp_arrays_inplace(
+    Ax_new: np.ndarray,
+    l_new: np.ndarray,
+    u_new: np.ndarray,
+    Ax_template: np.ndarray,
+    l_template: np.ndarray,
+    u_template: np.ndarray,
+    # maps for dynamics:
+    idx_Ad: np.ndarray,   # (N, nx, nx)
+    idx_Bd: np.ndarray,   # (N, nx, nu)
+    # maps for inequalities:
+    idx_Gx: np.ndarray,   # (N, nc, nx)
+    idx_Gu: np.ndarray,   # (N, nc, nu)
+    # rhs data:
+    x0: np.ndarray,       # (nx,)
+    cd_all: np.ndarray,   # (N, nx)
+    Ad_all: np.ndarray,   # (N, nx, nx)
+    Bd_all: np.ndarray,   # (N, nx, nu)
+    Gx_all: np.ndarray,   # (N, nc, nx)
+    Gu_all: np.ndarray,   # (N, nc, nu)
+    rhs_all: np.ndarray,  # (N, nc)
+    # dims:
+    nx: int,
+    nu: int,
+    nc: int,
+    N: int,
+    n_eq: int,
+) -> None:
+    """
+    Fill Ax_new, l_new, u_new in-place:
+      - start from templates
+      - overwrite equality RHS (x0 and cd)
+      - overwrite Ax entries for -Ad and -Bd blocks
+      - overwrite Ax entries for Gx and Gu inequality blocks
+      - overwrite inequality upper bounds u (rhs)
+    """
+
+    # Copy templates
+    Ax_new[:] = Ax_template
+    l_new[:] = l_template
+    u_new[:] = u_template
+
+    # Initial condition RHS: x0 = current x
+    for i in range(nx):
+        l_new[i] = x0[i]
+        u_new[i] = x0[i]
+
+    # Stage-wise dynamics and inequalities
+    for k in range(N):
+        row0 = (k + 1) * nx
+
+        # Equality RHS = cd_k
+        for i in range(nx):
+            l_new[row0 + i] = cd_all[k, i]
+            u_new[row0 + i] = cd_all[k, i]
+
+        # Equality matrix: -Ad_k on x_k
+        for i in range(nx):
+            for j in range(nx):
+                Ax_new[idx_Ad[k, i, j]] = -Ad_all[k, i, j]
+
+        # Equality matrix: -Bd_k on u_k
+        for i in range(nx):
+            for j in range(nu):
+                Ax_new[idx_Bd[k, i, j]] = -Bd_all[k, i, j]
+
+        # Inequalities: stage rows start at n_eq + k*nc
+        ineq_row0 = n_eq + k * nc
+
+        # Fill Gx_k
+        for i in range(nc):
+            for j in range(nx):
+                Ax_new[idx_Gx[k, i, j]] = Gx_all[k, i, j]
+
+        # Fill Gu_k
+        for i in range(nc):
+            for j in range(nu):
+                Ax_new[idx_Gu[k, i, j]] = Gu_all[k, i, j]
+
+        # Bounds: l=-inf already, u=rhs_k
+        for i in range(nc):
+            u_new[ineq_row0 + i] = rhs_all[k, i]
+
+
+# ==========================
+# Public fast update function
+# ==========================
 
 def update_qp(
     prob,
     x: np.ndarray,
     X: np.ndarray,
     U: np.ndarray,
-    N: int,
-    A_fun: Callable,
-    l_fun: Callable,
-    u_fun: Callable,
-    P_fun: Callable,
-    q_fun: Callable,
-    A_row_idx: np.ndarray,
-    A_col_idx: np.ndarray,
-    P_row_idx: np.ndarray,
-    P_col_idx: np.ndarray
+    qp,
+    ws: QPWorkspace,
 ) -> None:
-    
-    # Shift linearization sequences
-    x_init    = x.copy()
-    x_bar_seq = shift_state_sequence(X)  # (N+1, nx)
-    u_bar_seq = shift_input_sequence(U)  # (N,   nu)
-    theta = pack_args(x_init, x_bar_seq, u_bar_seq, N)
+    """
+    Fast QP update, minimal signature.
 
-    # --- A: dense, then sample nonzeros in CSC order ---
-    A_dense = np.array(A_fun(theta), dtype=float)
-    Ax_new = A_dense[A_row_idx, A_col_idx]
-    l_new = np.array(l_fun(theta), dtype=float).reshape(-1)
-    u_new = np.array(u_fun(theta), dtype=float).reshape(-1)
+    Inputs:
+      prob : osqp.OSQP instance
+      x    : current state (nx,)
+      X,U  : previous optimal solution sequences to shift (X: (N+1,nx), U: (N,nu))
+      qp   : QPStructures dataclass from qp_offline (must expose templates, idx maps, and kernels)
+      ws   : QPWorkspace with preallocated buffers
 
-    # --- P: evaluate, ensure dense, then sample upper-tri entries ---
-    P_raw_new = P_fun(theta)
-    if sparse.isspmatrix(P_raw_new):
-        P_dense_new = P_raw_new.toarray()
-    else:
-        P_dense_new = np.array(P_raw_new, dtype=float)
-    Px_new = P_dense_new[P_row_idx, P_col_idx]
-    q_new = q_fun(theta).reshape(-1)
+    Steps:
+      1) shift (X,U) -> (Xbar,Ubar)
+      2) compute Ad,Bd,cd per stage (compiled kernels)
+      3) compute Gx,Gu,rhs per stage (compiled kernels)
+      4) numba-fill Ax,l,u using index maps
+      5) prob.update(Ax=..., l=..., u=...)
+    """
 
-    prob.update(
-        Px=Px_new,
-        Ax=Ax_new,
-        q=q_new,
-        l=l_new,
-        u=u_new,
+    # Dimensions (trust shapes from arrays / qp maps)
+    N = U.shape[0]
+    nx = X.shape[1]
+    nu = U.shape[1]
+    nc = qp.idx_Gx.shape[1]
+    n_eq = (N + 1) * nx
+
+    # 1) Shift linearization sequences
+    shift_state_sequence_inplace(X, ws.Xbar)
+    shift_input_sequence_inplace(U, ws.Ubar)
+
+    # 2) Stage-wise evaluation (Python loop; kernels are compiled)
+    for k in range(N):
+        xk = ws.Xbar[k, :]
+        uk = ws.Ubar[k, :]
+
+        ws.Ad_all[k, :, :] = qp.Ad_fun(xk, uk)
+        ws.Bd_all[k, :, :] = qp.Bd_fun(xk, uk)
+        ws.cd_all[k, :] = qp.cd_fun(xk, uk)
+
+        ws.Gx_all[k, :, :] = qp.Gx_fun(xk, uk)
+        ws.Gu_all[k, :, :] = qp.Gu_fun(xk, uk)
+        ws.rhs_all[k, :] = qp.rhs_fun(xk, uk)
+
+    # 3) Fill arrays in-place (numba)
+    _fill_qp_arrays_inplace(
+        Ax_new=ws.Ax_new,
+        l_new=ws.l_new,
+        u_new=ws.u_new,
+        Ax_template=qp.Ax_template,
+        l_template=qp.l_template,
+        u_template=qp.u_template,
+        idx_Ad=qp.idx_Ad,
+        idx_Bd=qp.idx_Bd,
+        idx_Gx=qp.idx_Gx,
+        idx_Gu=qp.idx_Gu,
+        x0=x,
+        cd_all=ws.cd_all,
+        Ad_all=ws.Ad_all,
+        Bd_all=ws.Bd_all,
+        Gx_all=ws.Gx_all,
+        Gu_all=ws.Gu_all,
+        rhs_all=ws.rhs_all,
+        nx=nx,
+        nu=nu,
+        nc=nc,
+        N=N,
+        n_eq=n_eq,
     )
 
-
-
-def extract_solution(res, nx: int, nu: int, N: int) -> Tuple[np.ndarray, np.ndarray]:
-    z = res.x
-    X_flat = z[0:(N + 1) * nx]
-    U_flat = z[(N + 1) * nx:]
-    X = X_flat.reshape(N + 1, nx)
-    U = U_flat.reshape(N,     nu)
-    return X, U
+    # 4) Push updates to OSQP
+    prob.update(Ax=ws.Ax_new, l=ws.l_new, u=ws.u_new)
