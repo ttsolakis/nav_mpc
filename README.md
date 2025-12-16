@@ -1,18 +1,19 @@
 # 🧭 nav_mpc — Realtime Nonlinear MPC for Autonomous Navigation
 
-**nav_mpc** is a lightweight, high-performance Python framework for navigation using **realtime** Model Predictive Control (MPC). 
+**nav_mpc** is a lightweight, high-performance Python framework for navigation using **real-time** Model Predictive Control (MPC). 
 
 MPC is an attractive control approach because it naturally handles constraints of different types and flexibly incorporates diverse control objectives. However, nonlinear MPC is often computationally expensive. For many systems, the solver time can exceed the control-loop period, especially on embedded hardware where computation is limited.
 
-In contrast, Quadratic Programs (QPs) can be solved extremely quickly, and OSQP is particularly well suited for this. The core idea behind this framework is to convert a fully nonlinear MPC problem into a Linear Time-Varying (LTV) MPC problem that can be solved so fast that the linearization error remains small and does not degrade system performance.
+In contrast, Quadratic Programs (QPs) can be solved extremely quickly, and OSQP is particularly well suited for this. The core idea behind this framework is to convert a fully nonlinear MPC problem into a Linear Time-Varying (LTV) MPC problem that can be solved fast enough so that the linearization error remains small and does not degrade system performance.
 
 The framework combines:
 
 - **Symbolic definition**: Users define the nonlinear dynamics, constraints, and objective symbolically, exactly as they would on paper.
-- **Automatic QP formulation** : The framework linearizes the problem and constructs the corresponding parametric QP automatically.
-- **Cython compilation**: All functions that must be evaluated online for the parametric QP are compiled with Cython to achieve optimal runtime performance.  
-- **Realtime-safe OSQP solving**: The QP is solved with OSQP at very high speed, using a configurable time limit to guarantee realtime feasibility.
-- **Integrated simulator for rapid prototyping**: The same symbolic model used by the MPC is also used for simulation, with built-in plotting and animation tools to iterate quickly before deploying on embedded hardware.
+- **Automatic QP formulation** : The framework linearizes the original problem and constructs the corresponding parametric QP approximation automatically.
+- **Cython compilation**: All functions that must be evaluated online for the parametric QP are compiled with Cython to achieve optimal runtime performance.
+- **Real-time OSQP solving**: The QP is solved with OSQP extremely fast, using a configurable time limit to guarantee real-time feasibility.
+- **Integrated simulator for rapid prototyping**: The same symbolic model used by the MPC is also used for simulation, with built-in plotting and animation 
+tools to iterate quickly for rapid development before deploying on embedded hardware.
 
 Together, these components enable nonlinear MPC to run reliably and deterministically even on modest computing platforms, making it suitable for embedded robotic applications such as **ground vehicles (UGVs)**, **surface vessels (USVs)**, **aerial vehicles (UAVs)**, and more.
 
@@ -21,14 +22,14 @@ Together, these components enable nonlinear MPC to run reliably and deterministi
 ## ✨ Key Features
 
 ### 🔧 **1. Fully parametric, symbolic MPC pipeline**
-- Symbolic linearization around operating trajectories  
-- Automatic Jacobians and discrete-time dynamics  
-- QP constructed explicitly (A, l, u, P, q) for transparency & speed
+- Symbolic linearization around operating trajectories
+- Automatic Jacobians and discrete-time dynamics
+- QP constructed explicitly for transparency & speed
 
 ### ⚡ **2. C-accelerated QP evaluation via SymPy autowrap + Cython**
-- Expensive symbolic expressions compiled to native machine code  
+- Expensive symbolic expressions compiled to native machine code
 - Runtime QP evaluation **up to 5× faster** than simple Python
-- Ideal for Jetson, Raspberry Pi, and embedded control CPUs  
+- Ideal for Jetson, Raspberry Pi, and embedded control CPUs
 
 ### 🤖 **3. Clean modular architecture**
 ```
@@ -36,16 +37,16 @@ nav_mpc/
 ├── models/             # system dynamics (symbolic)
 ├── constraints/        # system + collision constraints (symbolic)
 ├── objectives/         # cost functions (symbolic)
-├── mpc2qp/             # core: offline QP formulation + fast online updates
+├── mpc2qp/             # core functionality: offline QP formulation + fast online updates
 ├── simulation/         # simulator, plotting, animations
-├── utils/              # profiling, system info
+├── utils/              # profiling, debugging, system info
 └── wrappers/           # ROS2 interface (coming)
 ```
 
 ### 🔌 **4. Extensible to arbitrary systems**
 - Simple pendulum (included)
 - Double pendulum (included)
-- Rover MPC (coming)  
+- Kinematic Rover  (coming)
 
 
 ---
@@ -53,8 +54,8 @@ nav_mpc/
 ## 🎯 Why nav_mpc?
 **nav_mpc** provides:
 - An easy way to define a full nonlinear MPC problem — dynamics, constraints, and objectives are written symbolically, just like on paper.
-- A fast development workflow in Python, combined with Cython compilation for ultra-fast numerical evaluation.
-- Realtime performance: the controller runs ultra-fast with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines.
+- A fast development workflow in Python with integrated simulation and result generation, combined with Cython compilation for ultra-fast numerical evaluation.
+- Real-time performance: the controller runs ultra-fast with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines.
 - A clean, minimal set of dependencies and a research-friendly architecture that enables rapid prototyping, fast iteration, and straightforward extension to new robotic systems.
 
 ---
@@ -80,7 +81,7 @@ All MPC problems are configured directly in `main.py`.
 #### 🔧 General settings
 
 ```python
-debugging = True        # print solver solution at each step (coming)
+debugging = True         # print solver solution at each step (coming)
 profiling = True         # collect timing statistics
 show_system_info = True  # print CPU / OS info (Linux only)
 ```
