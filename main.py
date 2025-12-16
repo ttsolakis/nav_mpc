@@ -11,10 +11,10 @@ from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 
 # Import system, objective, constraints and animation (user-defined for the specific problem)
-from models.simple_pendulum_model import SimplePendulumModel
-from objectives.simple_pendulum_objective import SimplePendulumObjective
-from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints
-from simulation.animation.simple_pendulum_animation import animate_pendulum
+from models.simple_rover_model import SimpleRoverModel
+from objectives.simple_rover_objective import SimpleRoverObjective
+from constraints.system_constraints.simple_rover_sys_constraints import SimpleRoverSystemConstraints
+from simulation.animation.rover_animation import animate_rover
 def main():
     # -----------------------------------
     # ---------- Problem Setup ----------
@@ -29,20 +29,20 @@ def main():
     embedded = True
     
     # System, objective, constraints
-    system      = SimplePendulumModel()
-    objective   = SimplePendulumObjective(system)
-    constraints = SimplePendulumSystemConstraints(system)
+    system      = SimpleRoverModel()
+    objective   = SimpleRoverObjective(system)
+    constraints = SimpleRoverSystemConstraints(system)
     
     # Initial and reference states
-    x_init = np.array([0.0, 0.0])
-    x_ref  = np.array([np.pi, 0.0])
+    x_init = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+    x_ref  = np.array([3.0, 3.0, np.pi, 0.0, 0.0])
 
     # Horizon, sampling time
-    N  = 40   # Steps
-    dt = 0.02 # seconds
+    N  = 20   # Steps
+    dt = 0.2  # seconds
 
     # Simulation parameters
-    tsim    = 2.0  # seconds
+    tsim    = 15.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -149,7 +149,7 @@ def main():
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_ref, show=False)
 
     print("Animating and saving...")
-    animate_pendulum(system, constraints, dt, x_traj, u_traj, show=False, save_gif=True)
+    animate_rover(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_ref, show=False,save_gif=True)
 
 if __name__ == "__main__":
     main()

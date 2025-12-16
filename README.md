@@ -219,8 +219,6 @@ Cores:    4 logical
 Simple pendulum swing-up and stabilization with LTV-MPC:
 
 <img src="examples/simple_pendulum/pendulum_animation.gif" width="400">
-<img src="examples/simple_pendulum/state_trajectories.png" width="400">
-<img src="examples/simple_pendulum/input_trajectories.png" width="400">
 
 Performance with N = 40, dt = 0.02 s on a laptop CPU:
 
@@ -231,7 +229,7 @@ Performance with N = 40, dt = 0.02 s on a laptop CPU:
 | Total MPC | **1.29 ms** | **1.18 ms** | **5.04 ms** |
 
 Notice that Max time for Total MPC can stay deterministically below dt 
-while getting optimal performance from OSQP.
+while getting optimal performance from OSQP (5.04 ms << 20 ms).
 
 ---
 
@@ -240,8 +238,6 @@ while getting optimal performance from OSQP.
 Double pendulum swing-up and stabilization with LTV-MPC:
 
 <img src="examples/double_pendulum/double_pendulum_animation.gif" width="400">
-<img src="examples/double_pendulum/state_trajectories.png" width="400">
-<img src="examples/double_pendulum/input_trajectories.png" width="400">
 
 Performance with N = 40, dt = 0.02 s on a laptop CPU:
 
@@ -252,7 +248,26 @@ Performance with N = 40, dt = 0.02 s on a laptop CPU:
 | Total MPC | **1.45 ms** | **1.35 ms** | **3.88 ms** |
 
 Notice that Max time for Total MPC can stay deterministically below dt 
-while getting optimal performance from OSQP.
+while getting optimal performance from OSQP (3.88 ms << 20 ms).
+
+---
+
+### Simple Rover
+
+Simple kinematic rover (unicycle) model set-point tracking with LTV-MPC:
+
+<img src="examples/simple_rover/rover_animation.gif" width="400">
+
+Performance with N = 20, dt = 0.2 s on a laptop CPU:
+
+| Stage | Mean | Min | Max |
+|-------|-------|-------|-------|
+| QP eval | 0.75 ms | 0.69 ms | 2.38 ms |
+| QP solve |0.39 ms | 0.25 ms | 0.90 ms |
+| Total MPC | **1.14 ms** | **0.95 ms** | **3.19 ms** |
+
+Notice that Max time for Total MPC can stay deterministically below dt 
+while getting optimal performance from OSQP (3.19 ms << 200 ms).
 
 ---
 
