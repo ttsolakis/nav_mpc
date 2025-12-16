@@ -71,7 +71,95 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2️⃣ Run an example
+---
+
+### 2️⃣ Problem Setup (inside `main.py`)
+
+All MPC problems are configured directly in `main.py`.
+
+#### 🔧 General settings
+
+```python
+debugging = True        # print solver solution at each step (coming)
+profiling = True         # collect timing statistics
+show_system_info = True  # print CPU / OS info (Linux only)
+```
+
+#### ⏱ Embedded / realtime mode
+
+```python
+embedded = True
+```
+
+When enabled, a **time limit is set on OSQP** so that the control loop remains realtime-feasible:
+
+```
+time_limit = dt - QP_evaluation_time
+```
+
+This is essential for embedded hardware and hard real-time control.
+
+---
+
+#### 🤖 System, objective, and constraints
+
+```python
+system      = SimplePendulumModel()
+objective   = SimplePendulumObjective(system)
+constraints = SimplePendulumSystemConstraints(system)
+```
+
+These are defined **symbolically** and automatically linearized:
+
+- `system`: nonlinear dynamics
+- `objective`: tracking / regulation cost
+- `constraints`: state and input limits
+
+Changing the system (e.g. pendulum → rover) requires **no changes to the MPC core**.
+
+---
+
+#### 🎯 Initial and reference states
+
+```python
+x_init = np.array([0.0, 0.0])      # initial state
+x_ref  = np.array([np.pi, 0.0])    # desired equilibrium
+```
+
+Used for trajectory tracking or stabilization.
+
+---
+
+#### 📐 MPC horizon and sampling time
+
+```python
+N  = 40     # prediction horizon [steps]
+dt = 0.02   # sampling time [s]
+```
+
+- Larger `N` → better foresight, higher computation cost
+- Smaller `dt` → faster control loop, tighter real-time constraints
+
+---
+
+#### 🧪 Simulation parameters
+
+```python
+tsim    = 2.0   # total simulation time [s]
+sim_cfg = SimulatorConfig(
+    dt=dt,
+    method="rk4",
+    substeps=10
+)
+```
+
+The simulator uses the **same nonlinear model** as the MPC, ensuring consistency.
+
+---
+
+### 3️⃣ Run an example
+
+Simply run:
 
 ```bash
 python main.py
@@ -79,21 +167,40 @@ python main.py
 
 This will:
 
-- run nonlinear MPC on given model, objective, constraints  
-- generate plots + animations  
-- print realtime timing statistics  
+- linearize and build the parametric QP offline
+- run realtime LTV-MPC in closed loop
+- print detailed timing statistics
+- generate plots (generic for any system)
+- generate animation (animation is system-specific)
 
-### 3️⃣ Enable embedded deployment
+Results are saved to:
 
-Inside `main.py`:
-
-```python
-embedded = True
+```text
+nav_mpc/results/
 ```
 
-This sets a time limit for OSQP so that the total control loop remains time-feasible.
+Directory is created automatically.
 
 ---
+
+### 4️⃣ Interpreting the results
+
+After execution you will see:
+
+- **State trajectories** (with bounds and references)
+- **Input trajectories** (with actuator limits)
+- **Animations** (pendulum, double pendulum, etc.)
+- **Timing statistics** (QP evaluation, QP solution, Total MPC, Simulation)
+
+These numbers demonstrate **deterministic real-time MPC** on modest hardware.
+
+---
+
+## 🧭 Next examples
+
+- ✔ Simple pendulum (included)
+- ✔ Double pendulum (included)
+- 🚗 Rover kinematic MPC (coming next)
 
 ## 🧪 Examples
 
