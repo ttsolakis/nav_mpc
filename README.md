@@ -35,18 +35,20 @@ Together, these components enable nonlinear MPC to run reliably and deterministi
 ```
 nav_mpc/
 ├── models/             # system dynamics (symbolic)
-├── constraints/        # system + collision constraints (symbolic)
 ├── objectives/         # cost functions (symbolic)
+├── constraints/        # system + collision constraints (symbolic)
+├── problem_setup/      # setup problem (import model, objective, constraints)
 ├── mpc2qp/             # core functionality: offline QP formulation + fast online updates
 ├── simulation/         # simulator, plotting, animations
 ├── utils/              # profiling, debugging, system info
-└── wrappers/           # ROS2 interface (coming)
+├── wrappers/           # ROS2 interface (coming)
+└── main.py             # generic MPC runner (problem-agnostic)
 ```
 
 ### 🔌 **4. Extensible to arbitrary systems**
 - Simple pendulum (included)
 - Double pendulum (included)
-- Kinematic Rover  (coming)
+- Kinematic Rover (included)
 
 
 ---
@@ -74,9 +76,35 @@ pip install -r requirements.txt
 
 ---
 
-### 2️⃣ Problem Setup (inside `main.py`)
+### 2️⃣ Problem Setup
 
-All MPC problems are configured directly in `main.py`.
+#### 🤖 System, objective, constraints & animation
+
+Each MPC problem (system, objective, constraints, animation) is defined in a
+dedicated **setup file** inside:
+
+```bash
+ nav_mpc/problem_setup/
+ ```
+
+A problem is selected in main.py via a single import:
+
+```python
+from problem_setup import setup_<custom_problem>
+problem_name, system, objective, constraints, animation = setup_<custom_problem>.setup_problem()
+
+```
+
+These are defined **symbolically** and automatically linearized:
+
+- `system`: nonlinear dynamics
+- `objective`: tracking / regulation cost
+- `constraints`: state and input limits
+- `animation`: animation of problem
+
+Changing the system (e.g. pendulum → rover) requires **no changes to the MPC core**.
+
+---
 
 #### 🔧 General settings
 
@@ -86,48 +114,25 @@ profiling = True         # collect timing statistics
 show_system_info = True  # print CPU / OS info (Linux only)
 ```
 
+---
+
 #### ⏱ Embedded / realtime mode
 
 ```python
 embedded = True
 ```
 
-When enabled, a **time limit is set on OSQP** so that the control loop remains realtime-feasible:
-
-```
-time_limit = dt - QP_evaluation_time
-```
-
-This is essential for embedded hardware and hard real-time control.
+When enabled, a **time limit is set on OSQP** so that the control loop remains realtime-feasible. This is essential for embedded hardware and hard real-time control.
 
 ---
 
-#### 🤖 System, objective, and constraints
+#### 📍 Initial and state
 
 ```python
-system      = SimplePendulumModel()
-objective   = SimplePendulumObjective(system)
-constraints = SimplePendulumSystemConstraints(system)
+x_init = np.array([0.0, 0.0])      # initial state (problem-dependent)
 ```
 
-These are defined **symbolically** and automatically linearized:
-
-- `system`: nonlinear dynamics
-- `objective`: tracking / regulation cost
-- `constraints`: state and input limits
-
-Changing the system (e.g. pendulum → rover) requires **no changes to the MPC core**.
-
----
-
-#### 🎯 Initial and reference states
-
-```python
-x_init = np.array([0.0, 0.0])      # initial state
-x_ref  = np.array([np.pi, 0.0])    # desired equilibrium
-```
-
-Used for trajectory tracking or stabilization.
+The reference / goal state is defined inside the objective and is problem-specific.
 
 ---
 
@@ -196,12 +201,6 @@ After execution you will see:
 These numbers demonstrate **deterministic real-time MPC** on modest hardware.
 
 ---
-
-## 🧭 Next examples
-
-- ✔ Simple pendulum (included)
-- ✔ Double pendulum (included)
-- 🚗 Rover kinematic MPC (coming next)
 
 ## 🧪 Examples
 

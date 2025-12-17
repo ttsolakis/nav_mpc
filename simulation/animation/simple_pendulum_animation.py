@@ -77,7 +77,10 @@ def animate_pendulum(
     save_path: str | Path | None = None,
     show: bool = False,
     save_gif: bool = False,
+    **kwargs,
 ):
+    _: kwargs
+    
     """
     Animate simple pendulum motion + torque bar.
 

@@ -10,17 +10,19 @@ from utils.profiling import init_timing_stats, update_timing_stats, print_timing
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 
-# Import system, objective, constraints and animation (user-defined for the specific problem)
-from models.simple_rover_model import SimpleRoverModel
-from objectives.simple_rover_objective import SimpleRoverObjective
-from constraints.system_constraints.simple_rover_sys_constraints import SimpleRoverSystemConstraints
-from simulation.animation.rover_animation import animate_rover
 def main():
+
     # -----------------------------------
     # ---------- Problem Setup ----------
     # -----------------------------------
 
-    # Enable debugging & profiling
+    # Import system, objective, constraints and animation via setup_<problem>.py file
+    from problem_setup import setup_double_pendulum
+    problem_name, system, objective, constraints, animation = setup_double_pendulum.setup_problem()
+
+    print(f"Setting up: {problem_name}")
+
+    # Enable debugging & profiling info
     debugging = False
     profiling = True
     show_system_info = True
@@ -28,21 +30,15 @@ def main():
     # Embedded setting (time-limited solver)
     embedded = True
     
-    # System, objective, constraints
-    system      = SimpleRoverModel()
-    objective   = SimpleRoverObjective(system)
-    constraints = SimpleRoverSystemConstraints(system)
-    
-    # Initial and reference states
+    # Initial state
     x_init = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
-    x_ref  = np.array([3.0, 3.0, np.pi, 0.0, 0.0])
 
     # Horizon, sampling time
-    N  = 20   # Steps
-    dt = 0.2  # seconds
+    N  = 50   # Steps
+    dt = 0.02  # seconds
 
     # Simulation parameters
-    tsim    = 15.0  # seconds
+    tsim    = 3.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -146,10 +142,10 @@ def main():
     # ---------------------------------------- 
 
     print("Plotting and saving...")
-    plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_ref, show=False)
+    plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=objective.x_ref, show=False)
 
     print("Animating and saving...")
-    animate_rover(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_ref, show=False,save_gif=True)
+    animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=objective.x_ref, show=False,save_gif=True)
 
 if __name__ == "__main__":
     main()

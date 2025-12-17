@@ -110,7 +110,10 @@ def animate_rover(
     save_path: str | Path | None = None,
     show: bool = False,
     save_gif: bool = False,
+    **kwargs,
 ):
+    _ = kwargs
+    
     """
     Animation for the augmented rover model where Δu is the input.
 

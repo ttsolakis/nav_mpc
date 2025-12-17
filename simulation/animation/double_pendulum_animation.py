@@ -77,7 +77,10 @@ def animate_double_pendulum(
     save_path: str | Path | None = None,
     show: bool = False,
     save_gif: bool = False,
+    **kwargs,
 ):
+    _ = kwargs
+    
     """
     Animate double pendulum motion + torque bar (τ on joint 1).
 
