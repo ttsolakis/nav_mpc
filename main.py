@@ -31,7 +31,7 @@ def main():
     embedded = True
     
     # Initial state
-    x_init = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+    x_init = np.array([0.0, 0.0, 0.0, 0.0])
 
     # Horizon, sampling time
     N  = 50   # Steps
@@ -87,6 +87,7 @@ def main():
     # Store trajectories for plotting / animation
     x_traj = [x.copy()]   
     u_traj = [] 
+    X_pred_traj = []
 
     # Initialize simulator
     sim = ContinuousSimulator(system, sim_cfg)
@@ -122,6 +123,7 @@ def main():
         x  = sim.step(x, u0)
         x_traj.append(x.copy())
         u_traj.append(u0.copy())
+        X_pred_traj.append(X.copy())
 
         end_sim_time = time.perf_counter()
 
@@ -145,7 +147,11 @@ def main():
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=objective.x_ref, show=False)
 
     print("Animating and saving...")
-    animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=objective.x_ref, show=False,save_gif=True)
+    animation(system=system, constraints=constraints, dt=dt,
+          x_traj=x_traj, u_traj=u_traj, x_goal=objective.x_ref,
+          X_pred_traj=X_pred_traj,
+          show=False, save_gif=True)
+
 
 if __name__ == "__main__":
     main()

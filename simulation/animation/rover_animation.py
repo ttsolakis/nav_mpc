@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Polygon
+from matplotlib.lines import Line2D
 
 from models.simple_rover_model import SimpleRoverModel
 
@@ -46,7 +47,6 @@ def _infer_wheel_speed_bounds(system: SimpleRoverModel, constraints: object | No
       - we expect the augmented model: x = [px,py,phi,omega_l,omega_r]
       - and constraints to expose x_min/x_max (or get_bounds()).
     """
-    # Preferred: constraints.get_bounds()
     if constraints is not None and hasattr(constraints, "get_bounds"):
         bounds = constraints.get_bounds()
         if len(bounds) == 4:
@@ -58,7 +58,6 @@ def _infer_wheel_speed_bounds(system: SimpleRoverModel, constraints: object | No
                 wmax = float(max(x_max[3], x_max[4]))
                 return wmin, wmax
 
-    # Next: direct attributes on constraints
     x_min_attr = getattr(constraints, "x_min", None) if constraints is not None else None
     x_max_attr = getattr(constraints, "x_max", None) if constraints is not None else None
     if x_min_attr is not None and x_max_attr is not None:
@@ -69,7 +68,6 @@ def _infer_wheel_speed_bounds(system: SimpleRoverModel, constraints: object | No
             wmax = float(max(x_max[3], x_max[4]))
             return wmin, wmax
 
-    # Fallback: use typical limits (matches your earlier u bounds)
     return -15.0, 15.0
 
 
@@ -100,6 +98,23 @@ def _square_body_vertices(px: float, py: float, phi: float, half_side: float) ->
     return (pts @ R.T) + np.array([px, py], dtype=float)
 
 
+def _extract_pred_list(kwargs: dict) -> list[np.ndarray] | None:
+    """
+    Try multiple common names so main() can pass predictions without changing this file.
+    Expected each element: array of shape (N+1, nx) for that control cycle.
+    """
+    for key in ("X_pred_traj", "X_pred_list", "X_preds", "X_horizon", "X_hist"):
+        if key in kwargs and kwargs[key] is not None:
+            pred = kwargs[key]
+            if isinstance(pred, list):
+                return pred
+            arr = np.asarray(pred, dtype=float)
+            # allow (T, N+1, nx) as a numpy array
+            if arr.ndim == 3:
+                return [arr[i] for i in range(arr.shape[0])]
+    return None
+
+
 def animate_rover(
     system: SimpleRoverModel,
     constraints: object | None,
@@ -112,8 +127,6 @@ def animate_rover(
     save_gif: bool = False,
     **kwargs,
 ):
-    _ = kwargs
-    
     """
     Animation for the augmented rover model where Δu is the input.
 
@@ -121,21 +134,30 @@ def animate_rover(
       State x = [px, py, phi, omega_l, omega_r]  (shape (T,5))
       Input u = [alpha_l, alpha_r]              (shape (T-1,2))
 
-    This animation shows:
-      - Left: XY trajectory with a square rover body + heading line
-      - Right: wheel speeds (omega_l, omega_r) as *growing lines* over time
+    Optional prediction-horizon overlay:
+      Pass a list of predicted state trajectories via one of:
+        - X_pred_traj, X_pred_list, X_preds, X_horizon, X_hist
+      Each element must be shaped (N+1, nx) and corresponds to one control cycle.
 
-    Notes
-    -----
-    We do NOT plot accelerations here (even though they are the true inputs).
-    Wheel speeds come from the state: x[:,3], x[:,4].
+    Visualization:
+      - Left: XY trajectory + rover body + (optional) fading predicted horizons
+      - Right: wheel speeds (omega_l, omega_r) as growing lines over time
     """
+    X_pred_list = _extract_pred_list(kwargs)
+
     # ---------------------------
     #  Export config
     # ---------------------------
     TARGET_ANIM_FPS = 20.0
     VIDEO_DPI = 110
     GIF_DPI = 80
+
+    # Prediction overlay config (always show up to 10 horizons, irrespective of N)
+    MAX_PRED_TRAILS = 10
+    PRED_ALPHA_MAX = 1.0
+    PRED_ALPHA_MIN = 0.10
+    # Downsample points within each predicted horizon polyline (for speed)
+    MAX_PRED_POINTS = 25
 
     # ---------------------------
     #  Stack trajectories
@@ -195,9 +217,7 @@ def animate_rover(
     # ---------------------------
     #  Figure / axes
     # ---------------------------
-    fig, (ax_xy, ax_w) = plt.subplots(
-        1, 2, figsize=(8.4, 3.6), gridspec_kw={"wspace": 0.35}
-    )
+    fig, (ax_xy, ax_w) = plt.subplots(1, 2, figsize=(8.4, 3.6), gridspec_kw={"wspace": 0.35})
     fig.suptitle("Simple rover simulation")
 
     # -------- XY axis --------
@@ -218,11 +238,20 @@ def animate_rover(
     ax_xy.set_xlim(xmin, xmax)
     ax_xy.set_ylim(ymin, ymax)
 
-    ax_xy.plot(px[0], py[0], marker=".", markersize=2, linestyle="None", label="start")
+    ax_xy.plot(px[0], py[0], marker=".", markersize=3, linestyle="None", label="start")
     if goal_xy is not None:
         ax_xy.plot(goal_xy[0], goal_xy[1], marker="*", markersize=8, linestyle="None", label="goal")
 
     (trail_line,) = ax_xy.plot([], [], linestyle="--", linewidth=1.5, label="trajectory")
+
+    # prediction horizon lines (fading)
+    pred_lines: list[Line2D] = []
+    if X_pred_list is not None:
+        # pre-create artists with fixed alpha (newest is alpha_max)
+        alphas = np.linspace(PRED_ALPHA_MAX, PRED_ALPHA_MIN, MAX_PRED_TRAILS)
+        for a in alphas:
+            (ln,) = ax_xy.plot([], [], linewidth=1.5, linestyle="-", alpha=float(a))
+            pred_lines.append(ln)
 
     body_poly = Polygon(
         _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
@@ -233,6 +262,7 @@ def animate_rover(
 
     (heading_line,) = ax_xy.plot([], [], linewidth=2)
     time_text = ax_xy.text(0.02, 0.95, "", transform=ax_xy.transAxes)
+
     ax_xy.legend(loc="best")
 
     # -------- wheel speed axis --------
@@ -244,12 +274,10 @@ def animate_rover(
     ax_w.set_xlim(float(t[0]), float(t[-1]))
     ax_w.set_ylim(-1.1 * wabs, 1.1 * wabs)
 
-    # bounds
     ax_w.axhline(0.0, color="k", linewidth=0.8, alpha=0.8)
     ax_w.axhline(float(wmin), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
     ax_w.axhline(float(wmax), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
 
-    # evolving lines (start empty)
     (w_l_line,) = ax_w.plot([], [], linewidth=2, label=r"$\omega_l$")
     (w_r_line,) = ax_w.plot([], [], linewidth=2, label=r"$\omega_r$")
     ax_w.legend(loc="best")
@@ -263,33 +291,79 @@ def animate_rover(
         yh = py_k + hlen * float(np.sin(phi_k))
         heading_line.set_data([px_k, xh], [py_k, yh])
 
+    def _set_pred_lines(step_k: int) -> None:
+        """
+        Draw up to MAX_PRED_TRAILS most recent predicted horizons ending at step_k.
+        We fade older horizons automatically via per-line alpha (fixed at init).
+        """
+        if X_pred_list is None:
+            return
+
+        # step_k is a state index; predictions are per-control-cycle (usually T-1 entries)
+        # Align: control cycle i produced X_pred_list[i], executed u[i], leading to x[i+1].
+        # We'll clamp safely.
+        last_cycle = min(max(step_k, 0), len(X_pred_list) - 1)
+
+        n_show = min(MAX_PRED_TRAILS, last_cycle + 1)
+        # newest first: cycle = last_cycle, then last_cycle-1, ...
+        for j in range(MAX_PRED_TRAILS):
+            if j < n_show:
+                pred = np.asarray(X_pred_list[last_cycle - j], dtype=float)
+                if pred.ndim != 2 or pred.shape[1] < 2:
+                    pred_lines[j].set_data([], [])
+                    continue
+
+                # use predicted px,py (assume state [px,py,...])
+                xs = pred[:, 0]
+                ys = pred[:, 1]
+
+                # downsample points for speed
+                if xs.size > MAX_PRED_POINTS:
+                    idx = np.linspace(0, xs.size - 1, MAX_PRED_POINTS).round().astype(int)
+                    xs = xs[idx]
+                    ys = ys[idx]
+
+                pred_lines[j].set_data(xs, ys)
+            else:
+                pred_lines[j].set_data([], [])
+
     def init():
         trail_line.set_data([], [])
         _set_body(float(px[0]), float(py[0]), float(phi[0]))
         time_text.set_text("")
         w_l_line.set_data([], [])
         w_r_line.set_data([], [])
-        return trail_line, body_poly, heading_line, time_text, w_l_line, w_r_line
+
+        if pred_lines:
+            for ln in pred_lines:
+                ln.set_data([], [])
+
+        artists = [trail_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists.extend(pred_lines)
+        return tuple(artists)
 
     def update(frame_idx: int):
         k = int(frame_indices[frame_idx])
-
-        px_k = float(px[k])
-        py_k = float(py[k])
-        phi_k = float(phi[k])
 
         # XY trail
         trail_line.set_data(px[: k + 1], py[: k + 1])
 
         # Rover pose
-        _set_body(px_k, py_k, phi_k)
+        _set_body(float(px[k]), float(py[k]), float(phi[k]))
+
+        # Prediction horizons
+        if pred_lines:
+            _set_pred_lines(step_k=k)
 
         # Wheel-speed evolving lines
         w_l_line.set_data(t[: k + 1], omega_l[: k + 1])
         w_r_line.set_data(t[: k + 1], omega_r[: k + 1])
 
         time_text.set_text(f"t = {t_anim[frame_idx]:.2f} s")
-        return trail_line, body_poly, heading_line, time_text, w_l_line, w_r_line
+
+        artists = [trail_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists.extend(pred_lines)
+        return tuple(artists)
 
     ani = FuncAnimation(
         fig,
