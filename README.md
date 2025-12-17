@@ -37,7 +37,7 @@ nav_mpc/
 ├── models/             # system dynamics (symbolic)
 ├── objectives/         # cost functions (symbolic)
 ├── constraints/        # system + collision constraints (symbolic)
-├── problem_setup/      # setup problem (import model, objective, constraints)
+├── problem_setup/      # problem definitions (model, objective, constraints, animation)
 ├── mpc2qp/             # core functionality: offline QP formulation + fast online updates
 ├── simulation/         # simulator, plotting, animations
 ├── utils/              # profiling, debugging, system info
@@ -126,7 +126,7 @@ When enabled, a **time limit is set on OSQP** so that the control loop remains r
 
 ---
 
-#### 📍 Initial and state
+#### 📍 Initial state
 
 ```python
 x_init = np.array([0.0, 0.0])      # initial state (problem-dependent)
@@ -280,8 +280,16 @@ Permissive, suitable for commercial + academic use.
 
 If you use this framework in academic work, please cite or link to:
 
-Anastasios Tsolakis, *nav_mpc: Realtime Nonlinear MPC via TV-QP*, 
+Anastasios Tsolakis, *nav_mpc: Realtime Nonlinear MPC via LTV-MPC*, 
 GitHub repository, 2025.
+
+---
+
+## 📬 Contact
+
+**Anastasios (Tasos) Tsolakis** 
+📧 tas.tsolakis@gmail.com 
+🌐 https://ttsolakis.github.io 
 
 ---
 
@@ -291,14 +299,6 @@ GitHub repository, 2025.
 > APIs, file structure, and features may change.
 > The framework is functional and examples run end-to-end, but some components
 > (e.g. collision avoidance, ROS2 wrapper, horizon visualization) are still evolving.
-
----
-
-## 📬 Contact
-
-**Anastasios (Tasos) Tsolakis** 
-📧 tas.tsolakis@gmail.com 
-🌐 https://ttsolakis.github.io 
 
 
 
