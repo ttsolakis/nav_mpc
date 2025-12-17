@@ -276,8 +276,29 @@ Permissive, suitable for commercial + academic use.
 
 ---
 
+## 📖 Citation
+
+If you use this framework in academic work, please cite or link to:
+
+Anastasios Tsolakis, *nav_mpc: Realtime Nonlinear MPC via TV-QP*, 
+GitHub repository, 2025.
+
+---
+
+> 🚧 **Work in Progress**
+>
+> This project is under active development. 
+> APIs, file structure, and features may change.
+> The framework is functional and examples run end-to-end, but some components
+> (e.g. collision avoidance, ROS2 wrapper, horizon visualization) are still evolving.
+
+---
+
 ## 📬 Contact
 
-**Anastasios (Tasos) Tsolakis**  
-📧 tas.tsolakis@gmail.com  
-🌐 https://ttsolakis.github.io  
+**Anastasios (Tasos) Tsolakis** 
+📧 tas.tsolakis@gmail.com 
+🌐 https://ttsolakis.github.io 
+
+
+
