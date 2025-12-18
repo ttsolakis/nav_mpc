@@ -7,6 +7,7 @@ import time
 # Import MPC2QP functionality, timing and plotting utilities (generic stuff)
 from mpc2qp import build_qp, make_workspace, update_qp, extract_solution
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
+from utils.print_solution import print_solution
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 
@@ -17,13 +18,13 @@ def main():
     # -----------------------------------
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
-    from problem_setup import setup_double_pendulum
-    problem_name, system, objective, constraints, animation = setup_double_pendulum.setup_problem()
+    from problem_setup import setup_simple_rover
+    problem_name, system, objective, constraints, animation = setup_simple_rover.setup_problem()
 
     print(f"Setting up: {problem_name}")
 
     # Enable debugging & profiling info
-    debugging = False
+    debugging = True
     profiling = True
     show_system_info = True
 
@@ -31,14 +32,14 @@ def main():
     embedded = True
     
     # Initial state
-    x_init = np.array([0.0, 0.0, 0.0, 0.0])
+    x_init = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
 
     # Horizon, sampling time
-    N  = 50   # Steps
-    dt = 0.02  # seconds
+    N  = 20   # Steps
+    dt = 0.2  # seconds
 
     # Simulation parameters
-    tsim    = 3.0  # seconds
+    tsim    = 5.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -107,31 +108,31 @@ def main():
         # 2) Solve current QP and extract solution
         start_opt_time = time.perf_counter()
 
-        if embedded: 
-            prob.update_settings(time_limit=dt-(end_eQP_time-start_eQP_time))  # set time limit for embedded setting
+        if embedded:
+            time_limit = dt - (end_eQP_time - start_eQP_time)
+            prob.update_settings(time_limit=max(1e-5, time_limit))
         res = prob.solve()
         if res.info.status not in ["solved", "solved inaccurate"]: 
             raise ValueError(f"OSQP did not solve the problem at step {i}! Status: {res.info.status}")
         X, U = extract_solution(res, nx, nu, N)
+        u0 = U[0]
 
         end_opt_time = time.perf_counter()
 
-        # 3) Simulate closed-loop step and store trajectories
+        # 3) Per-step prints
+        if debugging:
+            print_solution(i, x, u0, X, U)
+
+        # 4) Simulate closed-loop step and store trajectories
         start_sim_time = time.perf_counter()
 
-        u0 = U[0]
         x  = sim.step(x, u0)
         x_traj.append(x.copy())
         u_traj.append(u0.copy())
         X_pred_traj.append(X.copy())
 
         end_sim_time = time.perf_counter()
-
-        # 4) Per-step prints
-        if debugging:
-            print(f"Step {i}: X = {X}, U = {U}")
-            print(f"Step {i}: x = {x}, u0 = {u0}")
-        
+ 
         # 5) Profiling updates
         if profiling and i > 0:
             update_timing_stats(printing=False, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
