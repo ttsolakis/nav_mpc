@@ -134,14 +134,15 @@ def animate_rover(
       State x = [px, py, phi, omega_l, omega_r]  (shape (T,5))
       Input u = [alpha_l, alpha_r]              (shape (T-1,2))
 
-    Optional prediction-horizon overlay:
+    Optional prediction overlay:
       Pass a list of predicted state trajectories via one of:
         - X_pred_traj, X_pred_list, X_preds, X_horizon, X_hist
       Each element must be shaped (N+1, nx) and corresponds to one control cycle.
 
-    Visualization:
-      - Left: XY trajectory + rover body + (optional) fading predicted horizons
-      - Right: wheel speeds (omega_l, omega_r) as growing lines over time
+    What you will see at each timestep:
+      1) Current robot body (opaque)
+      2) Current predicted XY plan (orange polyline)
+      3) 5 ghost robot bodies equally spaced along the horizon, fading to alpha=0.1
     """
     X_pred_list = _extract_pred_list(kwargs)
 
@@ -152,12 +153,11 @@ def animate_rover(
     VIDEO_DPI = 110
     GIF_DPI = 80
 
-    # Prediction overlay config (always show up to 10 horizons, irrespective of N)
-    MAX_PRED_TRAILS = 10
-    PRED_ALPHA_MAX = 1.0
-    PRED_ALPHA_MIN = 0.10
-    # Downsample points within each predicted horizon polyline (for speed)
-    MAX_PRED_POINTS = 25
+    # Prediction overlay config
+    N_GHOSTS = 5
+    GHOST_ALPHA_MIN = 0.10
+    PLAN_LINE_COLOR = "orange"
+    PLAN_LINE_WIDTH = 2.0
 
     # ---------------------------
     #  Stack trajectories
@@ -244,25 +244,32 @@ def animate_rover(
 
     (trail_line,) = ax_xy.plot([], [], linestyle="--", linewidth=1.5, label="trajectory")
 
-    # prediction horizon lines (fading)
-    pred_lines: list[Line2D] = []
-    if X_pred_list is not None:
-        # pre-create artists with fixed alpha (newest is alpha_max)
-        alphas = np.linspace(PRED_ALPHA_MAX, PRED_ALPHA_MIN, MAX_PRED_TRAILS)
-        for a in alphas:
-            (ln,) = ax_xy.plot([], [], linewidth=1.5, linestyle="-", alpha=float(a))
-            pred_lines.append(ln)
+    # Current predicted plan polyline (orange)
+    (plan_line,) = ax_xy.plot([], [], linewidth=PLAN_LINE_WIDTH, linestyle="-", color=PLAN_LINE_COLOR, label="plan (current)")
 
+    # Current body (opaque)
     body_poly = Polygon(
         _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
         closed=True,
-        alpha=0.6,
+        alpha=1.0,  # opaque
     )
     ax_xy.add_patch(body_poly)
 
+    # Ghost bodies (5) fading down to alpha=0.1
+    ghost_polys: list[Polygon] = []
+    if X_pred_list is not None:
+        ghost_alphas = np.linspace(1.0, GHOST_ALPHA_MIN, N_GHOSTS + 1)[1:]  # exclude 1.0 (current)
+        for a in ghost_alphas:
+            gp = Polygon(
+                _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
+                closed=True,
+                alpha=float(a),
+            )
+            ax_xy.add_patch(gp)
+            ghost_polys.append(gp)
+
     (heading_line,) = ax_xy.plot([], [], linewidth=2)
     time_text = ax_xy.text(0.02, 0.95, "", transform=ax_xy.transAxes)
-
     ax_xy.legend(loc="best")
 
     # -------- wheel speed axis --------
@@ -282,64 +289,77 @@ def animate_rover(
     (w_r_line,) = ax_w.plot([], [], linewidth=2, label=r"$\omega_r$")
     ax_w.legend(loc="best")
 
-    def _set_body(px_k: float, py_k: float, phi_k: float) -> None:
+    def _set_body(poly: Polygon, px_k: float, py_k: float, phi_k: float) -> None:
         verts = _square_body_vertices(px_k, py_k, phi_k, half_side)
-        body_poly.set_xy(verts)
+        poly.set_xy(verts)
 
+    def _set_heading(px_k: float, py_k: float, phi_k: float) -> None:
         hlen = 1.2 * half_side
         xh = px_k + hlen * float(np.cos(phi_k))
         yh = py_k + hlen * float(np.sin(phi_k))
         heading_line.set_data([px_k, xh], [py_k, yh])
 
-    def _set_pred_lines(step_k: int) -> None:
+    def _set_plan_and_ghosts(step_k: int) -> None:
         """
-        Draw up to MAX_PRED_TRAILS most recent predicted horizons ending at step_k.
-        We fade older horizons automatically via per-line alpha (fixed at init).
+        For the current control cycle:
+          - draw current plan XY as orange line
+          - draw 5 ghost bodies equally spaced along horizon
         """
         if X_pred_list is None:
+            plan_line.set_data([], [])
+            for gp in ghost_polys:
+                gp.set_xy(_square_body_vertices(float(px[step_k]), float(py[step_k]), float(phi[step_k]), half_side))
+                gp.set_visible(False)
             return
 
-        # step_k is a state index; predictions are per-control-cycle (usually T-1 entries)
-        # Align: control cycle i produced X_pred_list[i], executed u[i], leading to x[i+1].
-        # We'll clamp safely.
         last_cycle = min(max(step_k, 0), len(X_pred_list) - 1)
+        pred = np.asarray(X_pred_list[last_cycle], dtype=float)
 
-        n_show = min(MAX_PRED_TRAILS, last_cycle + 1)
-        # newest first: cycle = last_cycle, then last_cycle-1, ...
-        for j in range(MAX_PRED_TRAILS):
-            if j < n_show:
-                pred = np.asarray(X_pred_list[last_cycle - j], dtype=float)
-                if pred.ndim != 2 or pred.shape[1] < 2:
-                    pred_lines[j].set_data([], [])
-                    continue
+        if pred.ndim != 2 or pred.shape[1] < 3:
+            plan_line.set_data([], [])
+            for gp in ghost_polys:
+                gp.set_visible(False)
+            return
 
-                # use predicted px,py (assume state [px,py,...])
-                xs = pred[:, 0]
-                ys = pred[:, 1]
+        # current plan line (orange)
+        xs = pred[:, 0]
+        ys = pred[:, 1]
+        plan_line.set_data(xs, ys)
 
-                # downsample points for speed
-                if xs.size > MAX_PRED_POINTS:
-                    idx = np.linspace(0, xs.size - 1, MAX_PRED_POINTS).round().astype(int)
-                    xs = xs[idx]
-                    ys = ys[idx]
+        # equally spaced indices (including 0 and last)
+        Nh = pred.shape[0] - 1
+        if Nh <= 0:
+            for gp in ghost_polys:
+                gp.set_visible(False)
+            return
 
-                pred_lines[j].set_data(xs, ys)
-            else:
-                pred_lines[j].set_data([], [])
+        idxs = np.linspace(0, Nh, N_GHOSTS + 1).round().astype(int)  # includes 0
+        # ghosts are the 1..N_GHOSTS samples (exclude 0 which is current state)
+        ghost_idxs = idxs[1:]
+
+        for gp, ii in zip(ghost_polys, ghost_idxs, strict=False):
+            pxg = float(pred[ii, 0])
+            pyg = float(pred[ii, 1])
+            phig = float(_wrap_to_pi(np.array([pred[ii, 2]])).item())
+            _set_body(gp, pxg, pyg, phig)
+            gp.set_visible(True)
 
     def init():
         trail_line.set_data([], [])
-        _set_body(float(px[0]), float(py[0]), float(phi[0]))
+        plan_line.set_data([], [])
+
+        _set_body(body_poly, float(px[0]), float(py[0]), float(phi[0]))
+        _set_heading(float(px[0]), float(py[0]), float(phi[0]))
         time_text.set_text("")
+
         w_l_line.set_data([], [])
         w_r_line.set_data([], [])
 
-        if pred_lines:
-            for ln in pred_lines:
-                ln.set_data([], [])
+        for gp in ghost_polys:
+            gp.set_visible(False)
 
-        artists = [trail_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
-        artists.extend(pred_lines)
+        artists = [trail_line, plan_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists.extend(ghost_polys)
         return tuple(artists)
 
     def update(frame_idx: int):
@@ -348,12 +368,12 @@ def animate_rover(
         # XY trail
         trail_line.set_data(px[: k + 1], py[: k + 1])
 
-        # Rover pose
-        _set_body(float(px[k]), float(py[k]), float(phi[k]))
+        # Current rover pose (opaque)
+        _set_body(body_poly, float(px[k]), float(py[k]), float(phi[k]))
+        _set_heading(float(px[k]), float(py[k]), float(phi[k]))
 
-        # Prediction horizons
-        if pred_lines:
-            _set_pred_lines(step_k=k)
+        # Plan + ghost bodies from current prediction horizon
+        _set_plan_and_ghosts(step_k=k)
 
         # Wheel-speed evolving lines
         w_l_line.set_data(t[: k + 1], omega_l[: k + 1])
@@ -361,8 +381,8 @@ def animate_rover(
 
         time_text.set_text(f"t = {t_anim[frame_idx]:.2f} s")
 
-        artists = [trail_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
-        artists.extend(pred_lines)
+        artists = [trail_line, plan_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists.extend(ghost_polys)
         return tuple(artists)
 
     ani = FuncAnimation(

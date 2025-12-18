@@ -35,11 +35,11 @@ def main():
     x_init = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
 
     # Horizon, sampling time
-    N  = 50   # Steps
+    N  = 30   # Steps
     dt = 0.1  # seconds
 
     # Simulation parameters
-    tsim    = 10.0  # seconds
+    tsim    = 15.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -77,10 +77,10 @@ def main():
 
     # Initialize OSQP solver
     prob = osqp.OSQP()
-    prob.setup(qp.P0, qp.q0, qp.A, qp.l0, qp.u0, warm_starting=True, verbose=False)
+    prob.setup(qp.P0, qp.q_template, qp.A, qp.l0, qp.u0, warm_starting=True, verbose=False)
 
     # Preallocate arrays & warmup numba compilation
-    ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A.data, l0=qp.l0, u0=qp.u0)
+    ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A.data, l0=qp.l0, u0=qp.u0, P_data=qp.P0.data, q0=qp.q_template)
     X = np.zeros((N+1, nx))
     U = np.zeros((N,   nu))
     update_qp(prob, x, X, U, qp, ws)  

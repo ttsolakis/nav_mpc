@@ -24,8 +24,8 @@ class SimpleRoverSystemConstraints(SystemConstraints):
 
         # input: wheel acceleration limits (tune these!)
         # Start conservative; too small => sluggish, too big => still jittery.
-        self.u_min[:] = -1.0
-        self.u_max[:] = +1.0
+        self.u_min[:] = -2.0
+        self.u_max[:] = +2.0
 
     def build_system_constraints(self) -> sp.Matrix:
         x = self.x_sym

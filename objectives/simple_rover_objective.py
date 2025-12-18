@@ -32,7 +32,7 @@ class SimpleRoverObjective(Objective):
         u_ref: np.ndarray | None = None,
         *,
         # --- new knobs for heading reference ---
-        phi_goal_switch_dist: float = 0.25,   # [m] if closer than this -> use phi_goal
+        phi_goal_switch_dist: float = 0.01,   # [m] if closer than this -> use phi_goal
         phi_ramp_dist: float = 2.0,           # [m] ramp heading importance over this distance
         phi_weight_far: float = 0.0,          # multiplier on phi error far away
         phi_weight_near: float = 1.0,         # multiplier on phi error near goal
@@ -45,17 +45,17 @@ class SimpleRoverObjective(Objective):
         # -------------------------
         if Q is None:
             # [px, py, phi, omega_l, omega_r]
-            Q = np.diag([10.0, 10.0, 5.0, 1e-7, 1e-7])
+            Q = 5*np.diag([10.0, 10.0, 10.0, 1e-7, 1e-7])
 
         if QN is None:
-            QN = np.diag([10.0, 10.0, 5.0, 1e-7, 1e-7])
+            QN = 5*np.diag([10.0, 10.0, 10.0, 5.0, 5.0])
 
         if R is None:
             # input effort (wheel accel)
             R = np.diag([2.0, 2.0])
 
         if x_goal is None:
-            x_goal = np.array([0.0, 2.0, np.pi / 2, 0.0, 0.0])
+            x_goal = np.array([2.0, 2.0, np.pi/2, 0.0, 0.0])
 
         if u_ref is None:
             u_ref = np.zeros(2)
@@ -83,71 +83,65 @@ class SimpleRoverObjective(Objective):
         self.phi_weight_near = float(phi_weight_near)
         self.angle_eps = float(angle_eps)
 
+    def state_error_symbolic(self) -> sp.Matrix:
+        return self.build_state_error()
+
+    def input_error_symbolic(self) -> sp.Matrix:
+        return self.build_input_error()
+
     @staticmethod
     def _wrap_to_pi(angle: sp.Expr) -> sp.Expr:
-        """
-        Smooth-ish wrap using atan2(sin, cos):
-          wrapToPi(a) = atan2(sin(a), cos(a))
-        """
         return sp.atan2(sp.sin(angle), sp.cos(angle))
 
     def build_state_error(self) -> sp.Matrix:
-        """
-        e_x(x) = [px-px_g, py-py_g, wrapped(phi - phi_ref(x)), omega_l-omg_l_g, omega_r-omg_r_g]^T
-
-        where phi_ref(x) is bearing-to-goal far away and phi_goal near the goal.
-        """
         x = self.x_sym
-
-        # symbols
         px, py, phi = x[0], x[1], x[2]
         omega_l, omega_r = x[3], x[4]
 
-        # goal values
         px_g = float(self.x_ref[0])
         py_g = float(self.x_ref[1])
         phi_g = float(self.x_ref[2])
         omega_l_g = float(self.x_ref[3])
         omega_r_g = float(self.x_ref[4])
 
-        # vector to goal
         dx = px_g - px
         dy = py_g - py
+        d  = sp.sqrt(dx**2 + dy**2 + self.angle_eps)
 
-        # distance (with epsilon to avoid 0/0 nastiness)
-        d = sp.sqrt(dx**2 + dy**2 + self.angle_eps)
-
-        # bearing-to-goal
+        # Bearing-to-goal (well-defined away from goal)
         phi_bearing = sp.atan2(dy, dx)
-        phi_ref = sp.Piecewise(
-            (phi_g, d <= self.phi_goal_switch_dist),
-            (phi_bearing, True),
-        )
+
+        # Smooth switch weight: ~0 far, ~1 near
+        # switch_slope sets how "soft" the transition is (bigger = smoother)
+        switch_slope = 1.0
+        w = 0.5 * (1 - sp.tanh((d - self.phi_goal_switch_dist) / switch_slope))
+
+        # Blend references on unit circle (avoids wrap issues)
+        s = (1 - w) * sp.sin(phi_bearing) + w * sp.sin(phi_g)
+        c = (1 - w) * sp.cos(phi_bearing) + w * sp.cos(phi_g)
+        phi_ref = sp.atan2(s, c)
+
         e_phi = self._wrap_to_pi(phi - phi_ref)
 
-        # wrapped heading error
-        e_phi = self._wrap_to_pi(phi - phi_ref)
-
-        # distance-based ramp on heading importance
-        # w(d) = 0 far away, 1 near the goal (over phi_ramp_dist)
+        # Optional: ramp heading weight so far away it doesn't dominate
         if self.phi_ramp_dist > 0.0:
-            w01 = sp.Max(0, sp.Min(1, 1 - d / self.phi_ramp_dist))
+            # smooth 0..1 ramp (near goal -> 1)
+            ramp_slope = 1.0
+            w01 = 0.5 * (1 - sp.tanh((d - self.phi_ramp_dist) / ramp_slope))
         else:
             w01 = sp.Integer(1)
 
-        # actual multiplier between far and near
         w_phi = self.phi_weight_far + (self.phi_weight_near - self.phi_weight_far) * w01
-
-        # scale error so effective weight becomes Q[2,2] * w_phi
-        e_phi_scaled = sp.sqrt(w_phi) * e_phi
+        e_phi = sp.sqrt(w_phi) * e_phi
 
         return sp.Matrix([
             px - px_g,
             py - py_g,
-            e_phi_scaled,
+            e_phi,
             omega_l - omega_l_g,
             omega_r - omega_r_g,
         ])
+
 
     def build_input_error(self) -> sp.Matrix:
         """

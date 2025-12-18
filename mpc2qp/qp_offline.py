@@ -28,12 +28,21 @@ class QPStructures:
     Ax_template: np.ndarray
     l_template:  np.ndarray
     u_template:  np.ndarray
+    P_template: np.ndarray
+    q_template: np.ndarray
+    Q:  np.ndarray
+    QN: np.ndarray
+    R:  np.ndarray
 
     # Index maps into A.data for fast filling
     idx_Ad: np.ndarray   # (N, nx, nx)
     idx_Bd: np.ndarray   # (N, nx, nu)
     idx_Gx: np.ndarray   # (N, nc, nx)
     idx_Gu: np.ndarray   # (N, nc, nu)
+    
+    # Index maps into P.data for fast filling (upper-triangular only)
+    idx_Px: np.ndarray   # (N+1, nx, nx)  valid only for j>=i
+    idx_Pu: np.ndarray   # (N,   nu, nu)  valid only for j>=i
 
     # Compiled stage kernels
     Ad_fun:  Callable[[np.ndarray, np.ndarray], np.ndarray]
@@ -42,6 +51,10 @@ class QPStructures:
     Gx_fun:  Callable[[np.ndarray, np.ndarray], np.ndarray]
     Gu_fun:  Callable[[np.ndarray, np.ndarray], np.ndarray]
     rhs_fun: Callable[[np.ndarray, np.ndarray], np.ndarray]
+
+    # Compiled objective-error kernels
+    e_fun:   Callable[[np.ndarray], np.ndarray]
+    Ex_fun:  Callable[[np.ndarray], np.ndarray]
 
 def _build_discretized_linearized_dynamics(system: SystemModel, dt: float) -> Tuple[Callable, Callable, Callable]:
     """
@@ -165,6 +178,34 @@ def _build_linearized_inequality_kernels(system: SystemModel, constraints: Syste
         return np.asarray(rhs_core(*x, *u), dtype=float).reshape(-1)
 
     return Gx_fun, Gu_fun, rhs_fun
+
+def _build_linearized_error_kernels(system: SystemModel, objective: Objective):
+    """
+    Build compiled kernels for nonlinear error e(x) and its Jacobian E(x)=de/dx.
+
+    Returns:
+      e_fun(x)  -> (nx,)
+      Ex_fun(x) -> (nx,nx)
+    """
+    x_sym = system.state_symbolic()     # (nx,1)
+
+    e_sym = objective.state_error_symbolic()  # you’ll add this; returns (nx,1)
+    Ex_sym = e_sym.jacobian(x_sym)            # (nx,nx)
+
+    args = list(x_sym)
+
+    e_core  = autowrap(e_sym,  args=args, backend="cython")
+    Ex_core = autowrap(Ex_sym, args=args, backend="cython")
+
+    def e_fun(x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=float).reshape(-1)
+        return np.asarray(e_core(*x), dtype=float).reshape(-1)
+
+    def Ex_fun(x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=float).reshape(-1)
+        return np.asarray(Ex_core(*x), dtype=float)
+
+    return e_fun, Ex_fun
 
 def _csc_position(A_csc: sparse.csc_matrix, row: int, col: int) -> int:
     """
@@ -304,33 +345,78 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
     n_ineq = N * nc
     m = n_eq + n_ineq
 
-    # --------------------------------------------------------------------------------------------------------
-    # Build constant objective (P,q). For now constant later will be updated to time-varying P_k(x̄,ū), q_k(x̄,ū)
-    # --------------------------------------------------------------------------------------------------------
-    Q = objective.Q
-    QN = objective.QN
-    R = objective.R
+    # -----------------------------------------------------------------------------
+    # Build TIME-VARYING objective skeleton (P,q) with CONSTANT SPARSITY.
+    #
+    # Online will fill:
+    #   Px_k = Ex(x̄_k)^T Q  Ex(x̄_k)
+    #   qx_k = Ex(x̄_k)^T Q (e(x̄_k) - Ex(x̄_k) x̄_k)
+    #
+    # Here we only build:
+    #   - P0 as an upper-triangular CSC with correct sparsity (all zeros)
+    #   - q0 template (state part zeros; input part can be constant -R u_ref)
+    #   - idx_Px/idx_Pu indices into P0.data for fast overwrite online
+    # -----------------------------------------------------------------------------
 
-    x_ref = objective.x_ref.reshape(nx)
-    u_ref = objective.u_ref.reshape(nu)
+    Q = np.asarray(objective.Q, dtype=float)
+    QN = np.asarray(objective.QN, dtype=float)
+    R = np.asarray(objective.R, dtype=float)
+
+    u_ref = np.asarray(objective.u_ref, dtype=float).reshape(nu)
+
+    # --- Build upper-triangular P pattern with stored zeros ---
+    rowsP: list[int] = []
+    colsP: list[int] = []
+    dataP: list[float] = []
+
+    # State blocks (k=0..N): upper-tri only
+    for k in range(N + 1):
+        base = k * nx
+        for i in range(nx):
+            for j in range(i, nx):
+                rowsP.append(base + i)
+                colsP.append(base + j)
+                dataP.append(0.0)
+
+    # Input blocks (k=0..N-1): upper-tri only
+    u0 = (N + 1) * nx
+    for k in range(N):
+        base = u0 + k * nu
+        for i in range(nu):
+            for j in range(i, nu):
+                rowsP.append(base + i)
+                colsP.append(base + j)
+                dataP.append(0.0)
+
+    P0 = sparse.coo_matrix((dataP, (rowsP, colsP)), shape=(n_z, n_z)).tocsc()
+    P_template = P0.data.copy()
+
+    # --- q template: state part is filled online; input part can remain constant ---
+    q0 = np.zeros(n_z, dtype=float)
+    q_template = q0.copy()
 
     if N > 0:
-        P_state = sparse.kron(sparse.eye(N), Q)
-        P_x = sparse.block_diag([P_state, QN], format="csc")
-        P_u = sparse.kron(sparse.eye(N), R)
-        P_full = sparse.block_diag([P_x, P_u], format="csc")
-    else:
-        P_full = sparse.csc_matrix(QN)
+        q_u_stage = -R @ u_ref
+        q_u_all = np.kron(np.ones(N), q_u_stage)
+        q_template[(N + 1) * nx:] = q_u_all
 
-    P0 = sparse.triu(P_full).tocsc()
+    # --- Precompute CSC indices for P blocks (upper-tri only) ---
+    idx_Px = np.full((N + 1, nx, nx), -1, dtype=np.int64)
+    idx_Pu = np.full((N, nu, nu), -1, dtype=np.int64)
 
-    q_x_stage = -Q @ x_ref
-    q_x_all = np.kron(np.ones(N), q_x_stage) if N > 0 else np.zeros(0)
-    q_x_term = -QN @ x_ref
-    q_u_stage = -R @ u_ref
-    q_u_all = np.kron(np.ones(N), q_u_stage) if N > 0 else np.zeros(0)
-    q0 = np.hstack([q_x_all, q_x_term, q_u_all]).reshape(-1)
+    # state blocks
+    for k in range(N + 1):
+        base = k * nx
+        for i in range(nx):
+            for j in range(i, nx):
+                idx_Px[k, i, j] = _csc_position(P0, base + i, base + j)
 
+    # input blocks
+    for k in range(N):
+        base = (N + 1) * nx + k * nu
+        for i in range(nu):
+            for j in range(i, nu):
+                idx_Pu[k, i, j] = _csc_position(P0, base + i, base + j)
     # -----------------------------------------------
     # Build sparse A with FULL pattern (incl -Ad/-Bd)
     # -----------------------------------------------
@@ -458,6 +544,9 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
 
     Gx_fun, Gu_fun, rhs_fun = _build_linearized_inequality_kernels(system, constraints)
 
+    # Objective-error kernels (nonlinear e(x) and Jacobian Ex(x))
+    e_fun, Ex_fun = _build_linearized_error_kernels(system, objective)
+
     # Initial l/u for setup: start with templates (x0/cd updated online)
     l0 = l_template.copy()
     u0 = u_template.copy()
@@ -465,7 +554,11 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
     return QPStructures(
         P0=P0, q0=q0, A=A, l0=l0, u0=u0,
         Ax_template=Ax_template, l_template=l_template, u_template=u_template,
+        P_template=P_template, q_template=q_template,
+        Q=Q, QN=QN, R=R,
         idx_Ad=idx_Ad, idx_Bd=idx_Bd, idx_Gx=idx_Gx, idx_Gu=idx_Gu,
+        idx_Px=idx_Px, idx_Pu=idx_Pu,
         Ad_fun=Ad_fun, Bd_fun=Bd_fun, cd_fun=cd_fun,
         Gx_fun=Gx_fun, Gu_fun=Gu_fun, rhs_fun=rhs_fun,
+        e_fun=e_fun, Ex_fun=Ex_fun
     )
