@@ -35,11 +35,11 @@ def main():
     x_init = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
 
     # Horizon, sampling time
-    N  = 20   # Steps
-    dt = 0.2  # seconds
+    N  = 50   # Steps
+    dt = 0.1  # seconds
 
     # Simulation parameters
-    tsim    = 5.0  # seconds
+    tsim    = 10.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
