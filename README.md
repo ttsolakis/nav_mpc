@@ -257,16 +257,16 @@ Simple kinematic rover (unicycle) model set-point tracking with LTV-MPC:
 
 <img src="examples/simple_rover/rover_animation.gif" width="400">
 
-Performance with N = 20, dt = 0.2 s on a laptop CPU:
+Performance with N = 30, dt = 0.1 s on a laptop CPU:
 
 | Stage | Mean | Min | Max |
 |-------|-------|-------|-------|
-| QP eval | 0.75 ms | 0.69 ms | 2.38 ms |
-| QP solve |0.39 ms | 0.25 ms | 0.90 ms |
-| Total MPC | **1.14 ms** | **0.95 ms** | **3.19 ms** |
+| QP eval | 3.60 ms | 1.82 ms | 9.16 ms |
+| QP solve |0.64 ms | 0.38 ms | 1.99 ms |
+| Total MPC | **4.24 ms** | **2.20 ms** | **10.97 ms** |
 
 Notice that Max time for Total MPC can stay deterministically below dt 
-while getting optimal performance from OSQP (3.19 ms << 200 ms).
+while getting optimal performance from OSQP (10.97 ms << 100 ms).
 
 ---
 
