@@ -4,7 +4,7 @@ import numpy as np
 import osqp
 import time
 
-# Import MPC2QP functionality, timing and plotting utilities (generic stuff)
+# Import MPC2QP functionality, timing and plotting utilities
 from mpc2qp import build_qp, make_workspace, update_qp, extract_solution
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from utils.print_solution import print_solution
@@ -18,28 +18,28 @@ def main():
     # -----------------------------------
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
-    from problem_setup import setup_simple_rover
-    problem_name, system, objective, constraints, animation = setup_simple_rover.setup_problem()
+    from problem_setup import setup_double_pendulum
+    problem_name, system, objective, constraints, animation = setup_double_pendulum.setup_problem()
 
     print(f"Setting up: {problem_name}")
 
     # Enable debugging & profiling info
-    debugging = True
+    debugging = False
     profiling = True
-    show_system_info = True
+    system_info = True
 
     # Embedded setting (time-limited solver)
     embedded = True
     
     # Initial state
-    x_init = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+    x_init = np.array([0.0, 0.0, 0.0, 0.0])
 
     # Horizon, sampling time
-    N  = 30   # Steps
-    dt = 0.1  # seconds
+    N  = 40    # steps
+    dt = 0.02  # seconds
 
     # Simulation parameters
-    tsim    = 15.0  # seconds
+    tsim    = 3.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -51,7 +51,8 @@ def main():
     start_bQP_time = time.perf_counter()
 
     # QP matrices and vectors have a standard structure and sparsity:
-    # Build everything that is constant once, and prepare the exact memory addresses where the time-varying numbers will be written later.”
+    # Build everything that is constant once, and prepare the exact memory
+    # addresses where the time-varying numbers will be written later.
     qp = build_qp(system=system, objective=objective, constraints=constraints, N=N, dt=dt)
 
     end_bQP_time = time.perf_counter()
@@ -77,10 +78,10 @@ def main():
 
     # Initialize OSQP solver
     prob = osqp.OSQP()
-    prob.setup(qp.P0, qp.q_template, qp.A, qp.l0, qp.u0, warm_starting=True, verbose=False)
+    prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
 
     # Preallocate arrays & warmup numba compilation
-    ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A.data, l0=qp.l0, u0=qp.u0, P_data=qp.P0.data, q0=qp.q_template)
+    ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
     X = np.zeros((N+1, nx))
     U = np.zeros((N,   nu))
     update_qp(prob, x, X, U, qp, ws)  
@@ -138,7 +139,7 @@ def main():
             update_timing_stats(printing=False, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
 
     if profiling:
-        print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, show_system_info=show_system_info)
+        print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, system_info=system_info)
 
     # ----------------------------------------
     # ------------ Plot & Animate ------------

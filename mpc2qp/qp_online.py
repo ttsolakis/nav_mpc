@@ -13,21 +13,25 @@ from numba import njit
 
 @dataclass(slots=True)
 class QPWorkspace:
-    Ax_new: np.ndarray
+    # Constraint updates (CSC data + bounds)
+    A_data_new: np.ndarray   # == Ax in OSQP update
     l_new: np.ndarray
     u_new: np.ndarray
 
-    # NEW: objective buffers
-    P_new: np.ndarray   # OSQP expects upper-triangular CSC data array for P
+    # Objective updates (upper-tri CSC data + linear term)
+    P_data_new: np.ndarray   # == Px in OSQP update (upper-tri only)
     q_new: np.ndarray
 
+    # Linearization sequences
     Xbar: np.ndarray
     Ubar: np.ndarray
 
+    # Stage-wise evaluated dynamics
     Ad_all: np.ndarray
     Bd_all: np.ndarray
     cd_all: np.ndarray
 
+    # Stage-wise evaluated inequality linearization
     Gx_all: np.ndarray
     Gu_all: np.ndarray
     rhs_all: np.ndarray
@@ -38,26 +42,26 @@ def make_workspace(
     nx: int,
     nu: int,
     nc: int,
-    A_data: np.ndarray,
-    l0: np.ndarray,
-    u0: np.ndarray,
-    P_data: np.ndarray,
-    q0: np.ndarray,
+    A_data: np.ndarray,     # qp.A_init.data
+    l_init: np.ndarray,     # qp.l_init
+    u_init: np.ndarray,     # qp.u_init
+    P_data: np.ndarray,     # qp.P_init.data
+    q_init: np.ndarray,     # qp.q_init
 ) -> QPWorkspace:
     """
     Allocate all scratch buffers once.
 
     Notes:
-    - A_data should be qp.A.data (CSC data array). We keep a private copy for updates.
-    - P_data should be qp.P0.data (upper-tri CSC data array). We keep a private copy for updates.
-    - l0/u0 and q0 are copied to private arrays that we overwrite each step.
+    - A_data should be qp.A_init.data (CSC data array). We keep a private copy for updates.
+    - P_data should be qp.P_init.data (upper-tri CSC data array). We keep a private copy for updates.
+    - l_init/u_init and q_init are copied to private arrays that we overwrite each step.
     """
     return QPWorkspace(
-        Ax_new=A_data.copy(),
-        l_new=l0.copy(),
-        u_new=u0.copy(),
-        P_new=P_data.copy(),
-        q_new=q0.copy(),
+        A_data_new=A_data.copy(),
+        l_new=l_init.copy(),
+        u_new=u_init.copy(),
+        P_data_new=P_data.copy(),
+        q_new=q_init.copy(),
         Xbar=np.empty((N + 1, nx), dtype=float),
         Ubar=np.empty((N, nu), dtype=float),
         Ad_all=np.empty((N, nx, nx), dtype=float),
@@ -112,10 +116,10 @@ def extract_solution(res, nx: int, nu: int, N: int) -> Tuple[np.ndarray, np.ndar
 
 @njit(cache=True)
 def _fill_qp_arrays_inplace(
-    Ax_new: np.ndarray,
+    A_data_new: np.ndarray,
     l_new: np.ndarray,
     u_new: np.ndarray,
-    Ax_template: np.ndarray,
+    A_template: np.ndarray,
     l_template: np.ndarray,
     u_template: np.ndarray,
     idx_Ad: np.ndarray,   # (N, nx, nx)
@@ -135,12 +139,15 @@ def _fill_qp_arrays_inplace(
     N: int,
     n_eq: int,
 ) -> None:
-
-    Ax_new[:] = Ax_template
+    """
+    Fill A_data_new, l_new, u_new by copying templates and overwriting only the
+    time-varying entries (dynamics and inequality linearization).
+    """
+    A_data_new[:] = A_template
     l_new[:] = l_template
     u_new[:] = u_template
 
-    # Initial condition RHS: x0 = current x
+    # Initial condition: x0 = current x
     for i in range(nx):
         l_new[i] = x0[i]
         u_new[i] = x0[i]
@@ -156,24 +163,27 @@ def _fill_qp_arrays_inplace(
         # -Ad_k
         for i in range(nx):
             for j in range(nx):
-                Ax_new[idx_Ad[k, i, j]] = -Ad_all[k, i, j]
+                A_data_new[idx_Ad[k, i, j]] = -Ad_all[k, i, j]
 
         # -Bd_k
         for i in range(nx):
             for j in range(nu):
-                Ax_new[idx_Bd[k, i, j]] = -Bd_all[k, i, j]
+                A_data_new[idx_Bd[k, i, j]] = -Bd_all[k, i, j]
 
         # Inequalities
         ineq_row0 = n_eq + k * nc
 
+        # Gx_k
         for i in range(nc):
             for j in range(nx):
-                Ax_new[idx_Gx[k, i, j]] = Gx_all[k, i, j]
+                A_data_new[idx_Gx[k, i, j]] = Gx_all[k, i, j]
 
+        # Gu_k
         for i in range(nc):
             for j in range(nu):
-                Ax_new[idx_Gu[k, i, j]] = Gu_all[k, i, j]
+                A_data_new[idx_Gu[k, i, j]] = Gu_all[k, i, j]
 
+        # upper bound = rhs_k
         for i in range(nc):
             u_new[ineq_row0 + i] = rhs_all[k, i]
 
@@ -183,7 +193,7 @@ def _fill_qp_arrays_inplace(
 # ==========================
 
 def _fill_objective_inplace(
-    P_new: np.ndarray,
+    P_data_new: np.ndarray,
     q_new: np.ndarray,
     P_template: np.ndarray,
     q_template: np.ndarray,
@@ -202,37 +212,36 @@ def _fill_objective_inplace(
     """
     Build the LTV quadratic objective around Xbar:
 
-      e(x) ≈ e0 + E (x - xbar) = (E x) + (e0 - E xbar)
+      e(x) ≈ e0 + E (x - xbar) = E x + (e0 - E xbar) = E x + b
 
       0.5 * (E x + b)^T Q (E x + b)
         => P = E^T Q E
-           q = E^T Q b     where b = (e0 - E xbar)
+           q = E^T Q b
 
     Terminal uses QN.
 
-    Input blocks are constant: 0.5*(u-u_ref)^T R (u-u_ref) gives Pu=R and qu=-R u_ref.
-    (qu is already in q_template if you set it offline.)
+    Input blocks are constant: 0.5*(u-u_ref)^T R (u-u_ref) gives Pu=R and qu=-R u_ref
+    (qu is already in q_template if set offline).
     """
-
     # reset from templates
-    P_new[:] = P_template
+    P_data_new[:] = P_template
     q_new[:] = q_template
 
     # stage costs for k=0..N-1
     for k in range(N):
         xk = Xbar[k, :]
 
-        e0 = e_fun(xk)          # (nx,)
-        E  = Ex_fun(xk)         # (nx,nx)
+        e0 = e_fun(xk)      # (nx,)
+        E = Ex_fun(xk)      # (nx,nx)
 
-        b  = e0 - E @ xk        # (nx,)
-        Px = E.T @ Q @ E        # (nx,nx)
-        qx = E.T @ Q @ b        # (nx,)
+        b = e0 - E @ xk     # (nx,)
+        Px = E.T @ Q @ E    # (nx,nx)
+        qx = E.T @ Q @ b    # (nx,)
 
         # write Px upper-tri
         for i in range(nx):
             for j in range(i, nx):
-                P_new[idx_Px[k, i, j]] = Px[i, j]
+                P_data_new[idx_Px[k, i, j]] = Px[i, j]
 
         # write qx
         q_new[k * nx : (k + 1) * nx] = qx
@@ -241,15 +250,15 @@ def _fill_objective_inplace(
     xN = Xbar[N, :]
 
     e0 = e_fun(xN)
-    E  = Ex_fun(xN)
+    E = Ex_fun(xN)
 
-    b  = e0 - E @ xN
+    b = e0 - E @ xN
     Px = E.T @ QN @ E
     qx = E.T @ QN @ b
 
     for i in range(nx):
         for j in range(i, nx):
-            P_new[idx_Px[N, i, j]] = Px[i, j]
+            P_data_new[idx_Px[N, i, j]] = Px[i, j]
 
     q_new[N * nx : (N + 1) * nx] = qx
 
@@ -257,7 +266,7 @@ def _fill_objective_inplace(
     for k in range(N):
         for i in range(nu):
             for j in range(i, nu):
-                P_new[idx_Pu[k, i, j]] = R[i, j]
+                P_data_new[idx_Pu[k, i, j]] = R[i, j]
 
 
 # ==========================
@@ -273,12 +282,14 @@ def update_qp(
     ws: QPWorkspace,
 ) -> None:
     """
-    Fast QP update.
-
-    Also updates objective:
-      prob.update(Px=..., q=...)
+    Fast QP update:
+      - shifts (X,U) to get (Xbar,Ubar)
+      - evaluates stage kernels (Ad,Bd,cd,Gx,Gu,g)
+      - computes rhs for inequality linearization
+      - fills A,l,u in-place (numba)
+      - fills P,q in-place
+      - pushes updates to OSQP
     """
-
     N = U.shape[0]
     nx = X.shape[1]
     nu = U.shape[1]
@@ -289,25 +300,28 @@ def update_qp(
     shift_state_sequence_inplace(X, ws.Xbar)
     shift_input_sequence_inplace(U, ws.Ubar)
 
-    # 2) Stage-wise evaluation (compiled kernels)
+    # 2) Stage-wise evaluation (compiled kernels) + rhs computation from (Gx,Gu,g)
     for k in range(N):
         xk = ws.Xbar[k, :]
         uk = ws.Ubar[k, :]
 
         ws.Ad_all[k, :, :] = qp.Ad_fun(xk, uk)
         ws.Bd_all[k, :, :] = qp.Bd_fun(xk, uk)
-        ws.cd_all[k, :]    = qp.cd_fun(xk, uk)
+        ws.cd_all[k, :] = qp.cd_fun(xk, uk)
 
         ws.Gx_all[k, :, :] = qp.Gx_fun(xk, uk)
         ws.Gu_all[k, :, :] = qp.Gu_fun(xk, uk)
-        ws.rhs_all[k, :]   = qp.rhs_fun(xk, uk)
+
+        # rhs = -( g0 - Gx*xbar - Gu*ubar )
+        g0 = qp.g_fun(xk, uk)  # (nc,)
+        ws.rhs_all[k, :] = -(g0 - ws.Gx_all[k] @ xk - ws.Gu_all[k] @ uk)
 
     # 3) Fill A,l,u in-place (numba)
     _fill_qp_arrays_inplace(
-        Ax_new=ws.Ax_new,
+        A_data_new=ws.A_data_new,
         l_new=ws.l_new,
         u_new=ws.u_new,
-        Ax_template=qp.Ax_template,
+        A_template=qp.A_template,
         l_template=qp.l_template,
         u_template=qp.u_template,
         idx_Ad=qp.idx_Ad,
@@ -330,7 +344,7 @@ def update_qp(
 
     # 4) Fill P,q (Python, small dense ops per stage)
     _fill_objective_inplace(
-        P_new=ws.P_new,
+        P_data_new=ws.P_data_new,
         q_new=ws.q_new,
         P_template=qp.P_template,
         q_template=qp.q_template,
@@ -348,4 +362,4 @@ def update_qp(
     )
 
     # 5) Push updates to OSQP
-    prob.update(Px=ws.P_new, q=ws.q_new, Ax=ws.Ax_new, l=ws.l_new, u=ws.u_new)
+    prob.update(Px=ws.P_data_new, q=ws.q_new, Ax=ws.A_data_new, l=ws.l_new, u=ws.u_new)

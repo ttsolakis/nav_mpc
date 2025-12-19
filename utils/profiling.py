@@ -110,7 +110,7 @@ def print_timing_summary(
     nx: int,
     nu: int,
     nc: int | None = None,
-    show_system_info: bool = True,
+    system_info: bool = True,
 ) -> None:
     """
     Print a nice summary of timing stats and optionally system info.
@@ -154,5 +154,5 @@ def print_timing_summary(
         f"max = {_fmt(stats['max_sim'])} ms"
     )
 
-    if show_system_info:
+    if system_info:
         print_system_info()
