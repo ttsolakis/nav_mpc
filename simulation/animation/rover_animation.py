@@ -8,7 +8,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Polygon
-from matplotlib.lines import Line2D
 
 from models.simple_rover_model import SimpleRoverModel
 
@@ -115,6 +114,135 @@ def _extract_pred_list(kwargs: dict) -> list[np.ndarray] | None:
     return None
 
 
+def _extract_scan_list(kwargs: dict) -> list | None:
+    """
+    Accept a list of LaserScanLike objects OR a list/array of raw ranges arrays.
+    """
+    for key in ("lidar_scans", "scans", "scan_list"):
+        if key in kwargs and kwargs[key] is not None:
+            scans = kwargs[key]
+            if isinstance(scans, list):
+                return scans
+            arr = np.asarray(scans)
+            # allow (T, n_rays) raw ranges array
+            if arr.ndim == 2:
+                return [arr[i] for i in range(arr.shape[0])]
+    return None
+
+
+def _scan_to_points_robot(scan) -> np.ndarray:
+    """
+    Convert a LaserScanLike (or raw ranges array) to ROBOT-frame points (M,2).
+    Robot frame: +x forward, +y left.
+
+    - If scan has attribute `.ranges`: uses scan.angle_min / scan.angle_increment.
+    - If scan is a 1D np.ndarray: assumes angles are evenly spaced [-pi, pi].
+
+    Points with range=inf are ignored.
+    """
+    if hasattr(scan, "ranges"):
+        ranges = np.asarray(scan.ranges, dtype=float).reshape(-1)
+        angle_min = float(scan.angle_min)
+        angle_inc = float(scan.angle_increment)
+        angles = angle_min + np.arange(ranges.size) * angle_inc
+    else:
+        ranges = np.asarray(scan, dtype=float).reshape(-1)
+        angles = np.linspace(-np.pi, np.pi, ranges.size, endpoint=True)
+
+    mask = np.isfinite(ranges)
+    if not np.any(mask):
+        return np.empty((0, 2), dtype=float)
+
+    r = ranges[mask]
+    a = angles[mask]
+
+    # ROBOT frame points
+    xr = r * np.cos(a)
+    yr = r * np.sin(a)
+
+    return np.column_stack([xr, yr])
+
+
+def _points_robot_to_world(pts_r: np.ndarray, px: float, py: float, yaw: float) -> np.ndarray:
+    """
+    Rigid transform from robot frame to world frame:
+      p_w = [px,py] + R(yaw) * p_r
+    World: +x right, +y up.
+    """
+    if pts_r.size == 0:
+        return pts_r.reshape(0, 2)
+
+    c = float(np.cos(yaw))
+    s = float(np.sin(yaw))
+
+    xw = px + c * pts_r[:, 0] - s * pts_r[:, 1]
+    yw = py + s * pts_r[:, 0] + c * pts_r[:, 1]
+    return np.column_stack([xw, yw])
+
+
+
+def _maybe_load_occ_background(kwargs):
+    """
+    Returns (occ_img, extent) or (None, None).
+
+    Supported kwargs:
+      - occ_map: an OccupancyMap2D instance (preferred: avoids file I/O)
+      - occ_cfg: an OccupancyMapConfig instance (will be loaded)
+      - occ_map_path: str/Path to a map image (will be loaded)
+      - occ_resolution, occ_origin, occ_threshold, occ_invert: params if occ_map_path is used
+
+    Default map location (your repo layout):
+      nav_mpc/simulation/environment/maps/map.png
+    """
+    # Lazy import so animation still works without occupancy module
+    try:
+        from simulation.environment.occupancy_map import OccupancyMap2D, OccupancyMapConfig
+    except Exception:
+        return None, None
+
+    # 1) If user already passed an OccupancyMap2D, use it (best)
+    occ_map = kwargs.get("occ_map", None)
+    if occ_map is not None:
+        occ = np.flipud(occ_map.occ).astype(float)  # (H,W)
+        extent = [occ_map.xmin, occ_map.xmax, occ_map.ymin, occ_map.ymax]
+        return occ, extent
+
+    # 2) If user passed a config, load it
+    occ_cfg = kwargs.get("occ_cfg", None)
+    if occ_cfg is not None:
+        occ_map = OccupancyMap2D.from_png(occ_cfg)
+        occ = occ = np.flipud(occ_map.occ).astype(float)
+        extent = [occ_map.xmin, occ_map.xmax, occ_map.ymin, occ_map.ymax]
+        return occ, extent
+
+    # 3) Otherwise, try to load from a path (explicit or default)
+    project_root = Path(__file__).resolve().parents[2]  # nav_mpc/
+    default_path = project_root / "simulation" / "environment" / "maps" / "map.png"
+
+    occ_map_path = kwargs.get("occ_map_path", None)
+    if occ_map_path is None:
+        occ_map_path = default_path
+
+    # Config parameters (with sensible defaults)
+    res = float(kwargs.get("occ_resolution", 0.05))
+    origin = tuple(kwargs.get("occ_origin", (-10.0, -10.0)))
+    thr = int(kwargs.get("occ_threshold", 127))
+    inv = bool(kwargs.get("occ_invert", False))
+
+    cfg = OccupancyMapConfig(
+        map_path=str(occ_map_path),
+        resolution=res,
+        origin=origin,
+        occupied_threshold=thr,
+        invert=inv,
+    )
+
+    occ_map = OccupancyMap2D.from_png(cfg)
+    occ = np.flipud(occ_map.occ).astype(float)
+    extent = [occ_map.xmin, occ_map.xmax, occ_map.ymin, occ_map.ymax]
+    return occ, extent
+
+
 def animate_rover(
     system: SimpleRoverModel,
     constraints: object | None,
@@ -139,12 +267,28 @@ def animate_rover(
         - X_pred_traj, X_pred_list, X_preds, X_horizon, X_hist
       Each element must be shaped (N+1, nx) and corresponds to one control cycle.
 
+    Optional lidar overlay:
+      Pass a list of LaserScanLike objects (or raw range arrays) via one of:
+        - lidar_scans, scans, scan_list
+      Each element corresponds to one simulation timestep k (same indexing as x_traj).
+
+    Optional occupancy map background:
+      Pass:
+        - occ_map_path="maps/map.png"
+        - occ_resolution=0.05
+        - occ_origin=(-10.0, -10.0)
+      plus optionally occ_threshold / occ_invert.
+
     What you will see at each timestep:
       1) Current robot body (opaque)
       2) Current predicted XY plan (orange polyline)
-      3) 5 ghost robot bodies equally spaced along the horizon, fading to alpha=0.1
+      3) 5 ghost robot bodies equally spaced along the horizon
+      4) Lidar point cloud (scatter) in world coordinates
+      5) Occupancy map background (if provided)
     """
     X_pred_list = _extract_pred_list(kwargs)
+    scan_list = _extract_scan_list(kwargs)
+    occ_img, occ_extent = _maybe_load_occ_background(kwargs)
 
     # ---------------------------
     #  Export config
@@ -158,6 +302,12 @@ def animate_rover(
     GHOST_ALPHA_MIN = 0.10
     PLAN_LINE_COLOR = "orange"
     PLAN_LINE_WIDTH = 2.0
+
+    # Lidar scatter config
+    LIDAR_POINT_SIZE = 6  # marker size
+
+    # Occupancy background config
+    OCC_ALPHA = 0.25
 
     # ---------------------------
     #  Stack trajectories
@@ -235,8 +385,26 @@ def animate_rover(
         ymin = min(ymin, float(goal_xy[1]) - margin)
         ymax = max(ymax, float(goal_xy[1]) + margin)
 
+    # If occupancy map is provided, ensure it's fully visible
+    if occ_extent is not None:
+        xmin = min(xmin, float(occ_extent[0]))
+        xmax = max(xmax, float(occ_extent[1]))
+        ymin = min(ymin, float(occ_extent[2]))
+        ymax = max(ymax, float(occ_extent[3]))
+
     ax_xy.set_xlim(xmin, xmax)
     ax_xy.set_ylim(ymin, ymax)
+
+    # Optional occupancy background (draw first so everything else overlays it)
+    if occ_img is not None and occ_extent is not None:
+        ax_xy.imshow(
+            occ_img,
+            origin="lower",
+            extent=occ_extent,
+            interpolation="nearest",
+            alpha=OCC_ALPHA,
+            zorder=0,
+        )
 
     ax_xy.plot(px[0], py[0], marker=".", markersize=3, linestyle="None", label="start")
     if goal_xy is not None:
@@ -247,11 +415,14 @@ def animate_rover(
     # Current predicted plan polyline (orange)
     (plan_line,) = ax_xy.plot([], [], linewidth=PLAN_LINE_WIDTH, linestyle="-", color=PLAN_LINE_COLOR, label="plan (current)")
 
+    # Lidar point cloud (scatter)
+    lidar_scatter = ax_xy.scatter([], [], s=LIDAR_POINT_SIZE, alpha=0.8, label="lidar")
+
     # Current body (opaque)
     body_poly = Polygon(
         _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
         closed=True,
-        alpha=1.0,  # opaque
+        alpha=1.0,
     )
     ax_xy.add_patch(body_poly)
 
@@ -300,15 +471,9 @@ def animate_rover(
         heading_line.set_data([px_k, xh], [py_k, yh])
 
     def _set_plan_and_ghosts(step_k: int) -> None:
-        """
-        For the current control cycle:
-          - draw current plan XY as orange line
-          - draw 5 ghost bodies equally spaced along horizon
-        """
         if X_pred_list is None:
             plan_line.set_data([], [])
             for gp in ghost_polys:
-                gp.set_xy(_square_body_vertices(float(px[step_k]), float(py[step_k]), float(phi[step_k]), half_side))
                 gp.set_visible(False)
             return
 
@@ -321,12 +486,8 @@ def animate_rover(
                 gp.set_visible(False)
             return
 
-        # current plan line (orange)
-        xs = pred[:, 0]
-        ys = pred[:, 1]
-        plan_line.set_data(xs, ys)
+        plan_line.set_data(pred[:, 0], pred[:, 1])
 
-        # equally spaced indices (including 0 and last)
         Nh = pred.shape[0] - 1
         if Nh <= 0:
             for gp in ghost_polys:
@@ -334,8 +495,7 @@ def animate_rover(
             return
 
         idxs = np.linspace(0, Nh, N_GHOSTS + 1).round().astype(int)  # includes 0
-        # ghosts are the 1..N_GHOSTS samples (exclude 0 which is current state)
-        ghost_idxs = idxs[1:]
+        ghost_idxs = idxs[1:]  # exclude current state
 
         for gp, ii in zip(ghost_polys, ghost_idxs, strict=False):
             pxg = float(pred[ii, 0])
@@ -344,9 +504,20 @@ def animate_rover(
             _set_body(gp, pxg, pyg, phig)
             gp.set_visible(True)
 
+    def _set_lidar(step_k: int) -> None:
+        if scan_list is None or step_k < 0 or step_k >= len(scan_list):
+            lidar_scatter.set_offsets(np.empty((0, 2)))
+            return
+
+        pts_r = _scan_to_points_robot(scan_list[step_k])
+        pts_w = _points_robot_to_world(pts_r, float(px[step_k]), float(py[step_k]), float(phi[step_k]))
+        lidar_scatter.set_offsets(pts_w)
+
+
     def init():
         trail_line.set_data([], [])
         plan_line.set_data([], [])
+        lidar_scatter.set_offsets(np.empty((0, 2)))
 
         _set_body(body_poly, float(px[0]), float(py[0]), float(phi[0]))
         _set_heading(float(px[0]), float(py[0]), float(phi[0]))
@@ -358,30 +529,27 @@ def animate_rover(
         for gp in ghost_polys:
             gp.set_visible(False)
 
-        artists = [trail_line, plan_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists = [trail_line, plan_line, lidar_scatter, body_poly, heading_line, time_text, w_l_line, w_r_line]
         artists.extend(ghost_polys)
         return tuple(artists)
 
     def update(frame_idx: int):
         k = int(frame_indices[frame_idx])
 
-        # XY trail
         trail_line.set_data(px[: k + 1], py[: k + 1])
 
-        # Current rover pose (opaque)
         _set_body(body_poly, float(px[k]), float(py[k]), float(phi[k]))
         _set_heading(float(px[k]), float(py[k]), float(phi[k]))
 
-        # Plan + ghost bodies from current prediction horizon
         _set_plan_and_ghosts(step_k=k)
+        _set_lidar(step_k=k)
 
-        # Wheel-speed evolving lines
         w_l_line.set_data(t[: k + 1], omega_l[: k + 1])
         w_r_line.set_data(t[: k + 1], omega_r[: k + 1])
 
         time_text.set_text(f"t = {t_anim[frame_idx]:.2f} s")
 
-        artists = [trail_line, plan_line, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists = [trail_line, plan_line, lidar_scatter, body_poly, heading_line, time_text, w_l_line, w_r_line]
         artists.extend(ghost_polys)
         return tuple(artists)
 

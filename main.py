@@ -10,6 +10,9 @@ from utils.profiling import init_timing_stats, update_timing_stats, print_timing
 from utils.print_solution import print_solution
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
+from simulation.environment.occupancy_map import OccupancyMapConfig, OccupancyMap2D
+from simulation.lidar import LidarSimulator2D, LidarConfig
+
 
 def main():
 
@@ -18,8 +21,8 @@ def main():
     # -----------------------------------
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
-    from problem_setup import setup_double_pendulum
-    problem_name, system, objective, constraints, animation = setup_double_pendulum.setup_problem()
+    from problem_setup import setup_simple_rover
+    problem_name, system, objective, constraints, animation = setup_simple_rover.setup_problem()
 
     print(f"Setting up: {problem_name}")
 
@@ -32,14 +35,14 @@ def main():
     embedded = True
     
     # Initial state
-    x_init = np.array([0.0, 0.0, 0.0, 0.0])
+    x_init = np.array([-2.0, 0.0, 0.0, 0.0, 0.0])
 
     # Horizon, sampling time
     N  = 40    # steps
-    dt = 0.02  # seconds
+    dt = 0.1  # seconds
 
     # Simulation parameters
-    tsim    = 3.0  # seconds
+    tsim    = 20.0  # seconds
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
 
     # -----------------------------------
@@ -94,6 +97,19 @@ def main():
     # Initialize simulator
     sim = ContinuousSimulator(system, sim_cfg)
 
+    # -------------------------------
+    # ---------- Lidar sim ----------
+    # -------------------------------
+    
+    occ_cfg = OccupancyMapConfig(map_path="map.png", world_width_m=5.0, occupied_threshold=127, invert=False)
+    occ_map = OccupancyMap2D.from_png(occ_cfg)
+
+    lidar_cfg = LidarConfig(range_max=8.0, angle_increment=np.deg2rad(0.72), seed=1, noise_std=0.0, drop_prob=0.0, ray_step=None)
+    lidar = LidarSimulator2D(occ_map=occ_map, cfg=lidar_cfg)
+
+    # Optional: store scans for debugging/plotting later
+    scans = []
+
     print("Running main loop...")
 
     nsim = int(tsim/dt)
@@ -131,6 +147,8 @@ def main():
         x_traj.append(x.copy())
         u_traj.append(u0.copy())
         X_pred_traj.append(X.copy())
+        scan = lidar.scan(np.array([float(x[0]), float(x[1]), float(x[2])], dtype=float))
+        scans.append(scan)
 
         end_sim_time = time.perf_counter()
  
@@ -149,10 +167,23 @@ def main():
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=objective.x_ref, show=False)
 
     print("Animating and saving...")
-    animation(system=system, constraints=constraints, dt=dt,
-          x_traj=x_traj, u_traj=u_traj, x_goal=objective.x_ref,
-          X_pred_traj=X_pred_traj,
-          show=False, save_gif=True)
+    animation(
+        system=system,
+        constraints=constraints,
+        dt=dt,
+        x_traj=x_traj,
+        u_traj=u_traj,
+        x_goal=objective.x_ref,
+        X_pred_traj=X_pred_traj,
+        lidar_scans=scans,        
+        occ_map=occ_map,              
+        occ_resolution=0.05,
+        occ_origin=(-10.0, -10.0),
+        occ_threshold=127,
+        occ_invert=False,
+        show=False,
+        save_gif=True
+    )
 
 
 if __name__ == "__main__":
