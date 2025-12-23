@@ -55,7 +55,7 @@ class SimpleRoverObjective(Objective):
             R = np.diag([2.0, 2.0])
 
         if x_goal is None:
-            x_goal = np.array([2.0, 2.0, np.pi/2, 0.0, 0.0])
+            x_goal = np.array([0.0, 1.0, np.pi/2, 0.0, 0.0])
 
         if u_ref is None:
             u_ref = np.zeros(2)

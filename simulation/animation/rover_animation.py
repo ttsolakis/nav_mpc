@@ -1,4 +1,3 @@
-# nav_mpc/simulation/animation/rover_animation.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,6 +7,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Polygon
+import matplotlib.colors as mcolors
+from matplotlib.colors import ListedColormap, BoundaryNorm
+
 
 from models.simple_rover_model import SimpleRoverModel
 
@@ -130,6 +132,21 @@ def _extract_scan_list(kwargs: dict) -> list | None:
     return None
 
 
+def _extract_global_path(kwargs: dict) -> np.ndarray | None:
+    """
+    Accept:
+      - global_path: (M,2) or (M,>=2)
+      - path_waypoints: same
+    Returns (M,2) float or None.
+    """
+    for key in ("global_path", "path_waypoints"):
+        if key in kwargs and kwargs[key] is not None:
+            gp = np.asarray(kwargs[key], dtype=float)
+            if gp.ndim == 2 and gp.shape[0] >= 1 and gp.shape[1] >= 2:
+                return gp[:, :2].copy()
+    return None
+
+
 def _scan_to_points_robot(scan) -> np.ndarray:
     """
     Convert a LaserScanLike (or raw ranges array) to ROBOT-frame points (M,2).
@@ -156,10 +173,8 @@ def _scan_to_points_robot(scan) -> np.ndarray:
     r = ranges[mask]
     a = angles[mask]
 
-    # ROBOT frame points
     xr = r * np.cos(a)
     yr = r * np.sin(a)
-
     return np.column_stack([xr, yr])
 
 
@@ -174,11 +189,9 @@ def _points_robot_to_world(pts_r: np.ndarray, px: float, py: float, yaw: float) 
 
     c = float(np.cos(yaw))
     s = float(np.sin(yaw))
-
     xw = px + c * pts_r[:, 0] - s * pts_r[:, 1]
     yw = py + s * pts_r[:, 0] + c * pts_r[:, 1]
     return np.column_stack([xw, yw])
-
 
 
 def _maybe_load_occ_background(kwargs):
@@ -194,36 +207,33 @@ def _maybe_load_occ_background(kwargs):
     Default map location (your repo layout):
       nav_mpc/simulation/environment/maps/map.png
     """
-    # Lazy import so animation still works without occupancy module
     try:
         from simulation.environment.occupancy_map import OccupancyMap2D, OccupancyMapConfig
     except Exception:
         return None, None
 
-    # 1) If user already passed an OccupancyMap2D, use it (best)
     occ_map = kwargs.get("occ_map", None)
     if occ_map is not None:
-        occ = np.flipud(occ_map.occ).astype(float)  # (H,W)
+        # IMPORTANT: imshow(origin="lower") expects row 0 at bottom;
+        # your occ_map.occ is in "row 0 is top" convention -> flip for display.
+        occ = np.flipud(occ_map.occ).astype(float)
         extent = [occ_map.xmin, occ_map.xmax, occ_map.ymin, occ_map.ymax]
         return occ, extent
 
-    # 2) If user passed a config, load it
     occ_cfg = kwargs.get("occ_cfg", None)
     if occ_cfg is not None:
         occ_map = OccupancyMap2D.from_png(occ_cfg)
-        occ = occ = np.flipud(occ_map.occ).astype(float)
+        occ = np.flipud(occ_map.occ).astype(float)
         extent = [occ_map.xmin, occ_map.xmax, occ_map.ymin, occ_map.ymax]
         return occ, extent
 
-    # 3) Otherwise, try to load from a path (explicit or default)
-    project_root = Path(__file__).resolve().parents[2]  # nav_mpc/
+    project_root = Path(__file__).resolve().parents[2]
     default_path = project_root / "simulation" / "environment" / "maps" / "map.png"
 
     occ_map_path = kwargs.get("occ_map_path", None)
     if occ_map_path is None:
         occ_map_path = default_path
 
-    # Config parameters (with sensible defaults)
     res = float(kwargs.get("occ_resolution", 0.05))
     origin = tuple(kwargs.get("occ_origin", (-10.0, -10.0)))
     thr = int(kwargs.get("occ_threshold", 127))
@@ -256,62 +266,33 @@ def animate_rover(
     **kwargs,
 ):
     """
-    Animation for the augmented rover model where Δu is the input.
-
-    Expected model convention:
-      State x = [px, py, phi, omega_l, omega_r]  (shape (T,5))
-      Input u = [alpha_l, alpha_r]              (shape (T-1,2))
-
-    Optional prediction overlay:
-      Pass a list of predicted state trajectories via one of:
-        - X_pred_traj, X_pred_list, X_preds, X_horizon, X_hist
-      Each element must be shaped (N+1, nx) and corresponds to one control cycle.
-
-    Optional lidar overlay:
-      Pass a list of LaserScanLike objects (or raw range arrays) via one of:
-        - lidar_scans, scans, scan_list
-      Each element corresponds to one simulation timestep k (same indexing as x_traj).
-
-    Optional occupancy map background:
-      Pass:
-        - occ_map_path="maps/map.png"
-        - occ_resolution=0.05
-        - occ_origin=(-10.0, -10.0)
-      plus optionally occ_threshold / occ_invert.
-
-    What you will see at each timestep:
-      1) Current robot body (opaque)
-      2) Current predicted XY plan (orange polyline)
-      3) 5 ghost robot bodies equally spaced along the horizon
-      4) Lidar point cloud (scatter) in world coordinates
-      5) Occupancy map background (if provided)
+    What you will see:
+      - occupancy map background (optional)
+      - global path waypoints (optional) + thin polyline
+      - robot trajectory
+      - current plan + ghost poses (optional)
+      - lidar points (optional)
+      - wheel speeds
     """
     X_pred_list = _extract_pred_list(kwargs)
     scan_list = _extract_scan_list(kwargs)
     occ_img, occ_extent = _maybe_load_occ_background(kwargs)
+    global_path = _extract_global_path(kwargs)
 
-    # ---------------------------
-    #  Export config
-    # ---------------------------
     TARGET_ANIM_FPS = 20.0
     VIDEO_DPI = 110
     GIF_DPI = 80
 
-    # Prediction overlay config
     N_GHOSTS = 5
     GHOST_ALPHA_MIN = 0.10
-    PLAN_LINE_COLOR = "orange"
     PLAN_LINE_WIDTH = 2.0
-
-    # Lidar scatter config
-    LIDAR_POINT_SIZE = 6  # marker size
-
-    # Occupancy background config
+    LIDAR_POINT_SIZE = 6
     OCC_ALPHA = 0.25
 
-    # ---------------------------
-    #  Stack trajectories
-    # ---------------------------
+    # Global path style
+    GP_LINE_WIDTH = 1.5
+    GP_MARKER_SIZE = 16
+
     x_arr = np.vstack(x_traj) if isinstance(x_traj, list) else np.asarray(x_traj, dtype=float)
     u_arr = np.vstack(u_traj) if isinstance(u_traj, list) else np.asarray(u_traj, dtype=float)
 
@@ -324,36 +305,25 @@ def animate_rover(
     if u_arr.shape[0] != T - 1:
         raise ValueError(f"Expected u_traj length T-1={T-1}, got {u_arr.shape[0]}")
 
-    # time base
     t = dt * np.arange(T, dtype=float)
-
-    # pose
     px = x_arr[:, 0].astype(float)
     py = x_arr[:, 1].astype(float)
     phi = _wrap_to_pi(x_arr[:, 2].astype(float))
-
-    # wheel speeds from state
     omega_l = x_arr[:, 3].astype(float)
     omega_r = x_arr[:, 4].astype(float)
 
-    # goal parsing
     goal_xy = None
     if x_goal is not None:
         x_goal = np.asarray(x_goal, dtype=float).reshape(-1)
         if x_goal.size >= 2:
             goal_xy = x_goal[:2].copy()
 
-    # body size: side = 2*L (L is half-track)
     L = float(getattr(system, "L"))
     half_side = float(L)
 
-    # wheel speed bounds for scaling
     wmin, wmax = _infer_wheel_speed_bounds(system, constraints)
     wabs = max(abs(wmin), abs(wmax), 1e-6)
 
-    # ---------------------------
-    #  Downsample for animation
-    # ---------------------------
     sim_fps = 1.0 / float(dt)
     frame_stride = max(1, int(round(sim_fps / TARGET_ANIM_FPS)))
 
@@ -364,9 +334,6 @@ def animate_rover(
     t_anim = t[frame_indices]
     T_anim = frame_indices.size
 
-    # ---------------------------
-    #  Figure / axes
-    # ---------------------------
     fig, (ax_xy, ax_w) = plt.subplots(1, 2, figsize=(8.4, 3.6), gridspec_kw={"wspace": 0.35})
     fig.suptitle("Simple rover simulation")
 
@@ -379,13 +346,19 @@ def animate_rover(
     margin = 3.0 * half_side
     xmin, xmax = float(px.min() - margin), float(px.max() + margin)
     ymin, ymax = float(py.min() - margin), float(py.max() + margin)
+
     if goal_xy is not None:
         xmin = min(xmin, float(goal_xy[0]) - margin)
         xmax = max(xmax, float(goal_xy[0]) + margin)
         ymin = min(ymin, float(goal_xy[1]) - margin)
         ymax = max(ymax, float(goal_xy[1]) + margin)
 
-    # If occupancy map is provided, ensure it's fully visible
+    if global_path is not None:
+        xmin = min(xmin, float(np.min(global_path[:, 0])) - margin)
+        xmax = max(xmax, float(np.max(global_path[:, 0])) + margin)
+        ymin = min(ymin, float(np.min(global_path[:, 1])) - margin)
+        ymax = max(ymax, float(np.max(global_path[:, 1])) + margin)
+
     if occ_extent is not None:
         xmin = min(xmin, float(occ_extent[0]))
         xmax = max(xmax, float(occ_extent[1]))
@@ -397,39 +370,52 @@ def animate_rover(
 
     # Optional occupancy background (draw first so everything else overlays it)
     if occ_img is not None and occ_extent is not None:
+        # 0 = free, 1 = occupied
+        cmap = ListedColormap([
+            "#ffefb0",  # free
+            "#72498D",  # occupied
+        ])
+        norm = BoundaryNorm([-0.5, 0.5, 1.5], cmap.N)
+
         ax_xy.imshow(
             occ_img,
             origin="lower",
             extent=occ_extent,
-            interpolation="nearest",
-            alpha=OCC_ALPHA,
+            cmap=cmap,
+            norm=norm,
+            interpolation="bilinear",  # smoother look (use "nearest" if you want crisp pixels)
+            alpha=0.35,                # overall transparency of the map layer
             zorder=0,
         )
 
+    # Global path (static)
+    if global_path is not None and global_path.shape[0] >= 1:
+        ax_xy.plot(global_path[:, 0], global_path[:, 1], linewidth=GP_LINE_WIDTH, linestyle="--", color="#ffd83d", alpha=0.6, label="global path")
+        ax_xy.scatter(global_path[:, 0], global_path[:, 1], s=GP_MARKER_SIZE, color="#ffd83d", alpha=0.6, label="waypoints")
+
+    # Start + goal
     ax_xy.plot(px[0], py[0], marker=".", markersize=3, linestyle="None", label="start")
     if goal_xy is not None:
-        ax_xy.plot(goal_xy[0], goal_xy[1], marker="*", markersize=8, linestyle="None", label="goal")
+        ax_xy.plot(goal_xy[0], goal_xy[1], marker="*", color="#ff7f0e", markersize=8, linestyle="None", label="goal")
 
-    (trail_line,) = ax_xy.plot([], [], linestyle="--", linewidth=1.5, label="trajectory")
+    (trail_line,) = ax_xy.plot([], [], linestyle="--", color="#008000", linewidth=1.5, label="trajectory")
+    (plan_line,) = ax_xy.plot([], [], linewidth=PLAN_LINE_WIDTH, color="#0058ca", linestyle="dotted", label="plan (current)")
+    lidar_scatter = ax_xy.scatter([], [], s=LIDAR_POINT_SIZE, marker=".", color="#b11010", alpha=0.8, label="lidar")
 
-    # Current predicted plan polyline (orange)
-    (plan_line,) = ax_xy.plot([], [], linewidth=PLAN_LINE_WIDTH, linestyle="-", color=PLAN_LINE_COLOR, label="plan (current)")
-
-    # Lidar point cloud (scatter)
-    lidar_scatter = ax_xy.scatter([], [], s=LIDAR_POINT_SIZE, alpha=0.8, label="lidar")
-
-    # Current body (opaque)
     body_poly = Polygon(
         _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
         closed=True,
-        alpha=1.0,
+        facecolor='#1f77b4',
+        edgecolor='#1f77b4',
+        linewidth=0.1,
+        alpha=1.0,            
+        zorder=6,
     )
     ax_xy.add_patch(body_poly)
 
-    # Ghost bodies (5) fading down to alpha=0.1
     ghost_polys: list[Polygon] = []
     if X_pred_list is not None:
-        ghost_alphas = np.linspace(1.0, GHOST_ALPHA_MIN, N_GHOSTS + 1)[1:]  # exclude 1.0 (current)
+        ghost_alphas = np.linspace(1.0, GHOST_ALPHA_MIN, N_GHOSTS + 1)[1:]
         for a in ghost_alphas:
             gp = Polygon(
                 _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
@@ -442,16 +428,15 @@ def animate_rover(
     (heading_line,) = ax_xy.plot([], [], linewidth=2)
     time_text = ax_xy.text(0.02, 0.95, "", transform=ax_xy.transAxes)
     ax_xy.legend(loc="best")
+    ax_xy.get_legend().set_visible(False)
 
     # -------- wheel speed axis --------
     ax_w.set_title("Wheel speeds")
     ax_w.set_xlabel("time [s]")
     ax_w.set_ylabel(r"$\omega$ [rad/s]")
     ax_w.grid(True)
-
     ax_w.set_xlim(float(t[0]), float(t[-1]))
     ax_w.set_ylim(-1.1 * wabs, 1.1 * wabs)
-
     ax_w.axhline(0.0, color="k", linewidth=0.8, alpha=0.8)
     ax_w.axhline(float(wmin), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
     ax_w.axhline(float(wmax), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
@@ -461,8 +446,7 @@ def animate_rover(
     ax_w.legend(loc="best")
 
     def _set_body(poly: Polygon, px_k: float, py_k: float, phi_k: float) -> None:
-        verts = _square_body_vertices(px_k, py_k, phi_k, half_side)
-        poly.set_xy(verts)
+        poly.set_xy(_square_body_vertices(px_k, py_k, phi_k, half_side))
 
     def _set_heading(px_k: float, py_k: float, phi_k: float) -> None:
         hlen = 1.2 * half_side
@@ -494,14 +478,11 @@ def animate_rover(
                 gp.set_visible(False)
             return
 
-        idxs = np.linspace(0, Nh, N_GHOSTS + 1).round().astype(int)  # includes 0
-        ghost_idxs = idxs[1:]  # exclude current state
+        idxs = np.linspace(0, Nh, N_GHOSTS + 1).round().astype(int)
+        ghost_idxs = idxs[1:]
 
         for gp, ii in zip(ghost_polys, ghost_idxs, strict=False):
-            pxg = float(pred[ii, 0])
-            pyg = float(pred[ii, 1])
-            phig = float(_wrap_to_pi(np.array([pred[ii, 2]])).item())
-            _set_body(gp, pxg, pyg, phig)
+            _set_body(gp, float(pred[ii, 0]), float(pred[ii, 1]), float(_wrap_to_pi(np.array([pred[ii, 2]])).item()))
             gp.set_visible(True)
 
     def _set_lidar(step_k: int) -> None:
@@ -512,7 +493,6 @@ def animate_rover(
         pts_r = _scan_to_points_robot(scan_list[step_k])
         pts_w = _points_robot_to_world(pts_r, float(px[step_k]), float(py[step_k]), float(phi[step_k]))
         lidar_scatter.set_offsets(pts_w)
-
 
     def init():
         trail_line.set_data([], [])
@@ -537,7 +517,6 @@ def animate_rover(
         k = int(frame_indices[frame_idx])
 
         trail_line.set_data(px[: k + 1], py[: k + 1])
-
         _set_body(body_poly, float(px[k]), float(py[k]), float(phi[k]))
         _set_heading(float(px[k]), float(py[k]), float(phi[k]))
 
@@ -546,7 +525,6 @@ def animate_rover(
 
         w_l_line.set_data(t[: k + 1], omega_l[: k + 1])
         w_r_line.set_data(t[: k + 1], omega_r[: k + 1])
-
         time_text.set_text(f"t = {t_anim[frame_idx]:.2f} s")
 
         artists = [trail_line, plan_line, lidar_scatter, body_poly, heading_line, time_text, w_l_line, w_r_line]
@@ -562,9 +540,6 @@ def animate_rover(
         interval=1000.0 / TARGET_ANIM_FPS,
     )
 
-    # ---------------------------
-    #  Save outputs
-    # ---------------------------
     _, mp4_path = _resolve_results_dir(save_path)
     video_fps = int(TARGET_ANIM_FPS)
 

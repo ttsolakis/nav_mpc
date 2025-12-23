@@ -4,15 +4,17 @@ import numpy as np
 import osqp
 import time
 
-# Import MPC2QP functionality, timing and plotting utilities
+# Import MPC2QP functionality and timing utilities
 from mpc2qp import build_qp, make_workspace, update_qp, extract_solution
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from utils.print_solution import print_solution
+
+# Import simulation test harness components (simulation, plotting, sensing, guidance)
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 from simulation.environment.occupancy_map import OccupancyMapConfig, OccupancyMap2D
 from simulation.lidar import LidarSimulator2D, LidarConfig
-
+from simulation.path_generators import rrt_star_plan, RRTStarConfig
 
 def main():
 
@@ -36,14 +38,24 @@ def main():
     
     # Initial state
     x_init = np.array([-2.0, 0.0, 0.0, 0.0, 0.0])
+    
 
-    # Horizon, sampling time
-    N  = 40    # steps
-    dt = 0.1  # seconds
+    # Horizon, sampling time and total simulation time
+    N    = 30    # steps
+    dt   = 0.1   # seconds
+    tsim = 15.0  # seconds
 
-    # Simulation parameters
-    tsim    = 20.0  # seconds
+    # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
+
+    # Occupancy map configuration
+    occ_cfg = OccupancyMapConfig(map_path="map.png", world_width_m=5.0, occupied_threshold=127, invert=False)
+
+    # Lidar configuration
+    lidar_cfg = LidarConfig(range_max=8.0, angle_increment=np.deg2rad(0.72), seed=1, noise_std=0.0, drop_prob=0.0, ray_step=None)
+
+    # Path generator configuration
+    rrt_cfg = RRTStarConfig(max_iters=6000, step_size=0.10, neighbor_radius=0.30, goal_sample_rate=0.10, collision_check_step=0.02, seed=1)
 
     # -----------------------------------
     # ---------- QP Formulation ---------
@@ -68,6 +80,15 @@ def main():
 
     print("Initializations...")
 
+    # Initialize simulator
+    sim = ContinuousSimulator(system, sim_cfg)
+
+    # Initialize occupancy map
+    occ_map = OccupancyMap2D.from_png(occ_cfg)
+    
+    # Initialize lidar simulator
+    lidar = LidarSimulator2D(occ_map=occ_map, cfg=lidar_cfg)
+
     # Initialize timing stats
     timing_stats = init_timing_stats()
 
@@ -89,26 +110,21 @@ def main():
     U = np.zeros((N,   nu))
     update_qp(prob, x, X, U, qp, ws)  
     
-    # Store trajectories for plotting / animation
+    # Store data for plotting & animation
     x_traj = [x.copy()]   
     u_traj = [] 
     X_pred_traj = []
-
-    # Initialize simulator
-    sim = ContinuousSimulator(system, sim_cfg)
-
-    # -------------------------------
-    # ---------- Lidar sim ----------
-    # -------------------------------
-    
-    occ_cfg = OccupancyMapConfig(map_path="map.png", world_width_m=5.0, occupied_threshold=127, invert=False)
-    occ_map = OccupancyMap2D.from_png(occ_cfg)
-
-    lidar_cfg = LidarConfig(range_max=8.0, angle_increment=np.deg2rad(0.72), seed=1, noise_std=0.0, drop_prob=0.0, ray_step=None)
-    lidar = LidarSimulator2D(occ_map=occ_map, cfg=lidar_cfg)
-
-    # Optional: store scans for debugging/plotting later
     scans = []
+
+    # Compute global path to goal
+    print("Computing global path to goal...")
+    robot_radius = 0.15
+    margin = 0.10
+    inflation = robot_radius + margin
+    start_xy = x_init[:2]
+    goal_xy  = objective.x_ref[:2] 
+    global_path = rrt_star_plan(occ_map=occ_map, start_xy=start_xy, goal_xy=goal_xy, inflation_radius_m=inflation, cfg=rrt_cfg)
+    print(f"[RRT*] Path waypoints: {global_path.shape[0]}")
 
     print("Running main loop...")
 
@@ -175,14 +191,11 @@ def main():
         u_traj=u_traj,
         x_goal=objective.x_ref,
         X_pred_traj=X_pred_traj,
-        lidar_scans=scans,        
-        occ_map=occ_map,              
-        occ_resolution=0.05,
-        occ_origin=(-10.0, -10.0),
-        occ_threshold=127,
-        occ_invert=False,
+        lidar_scans=scans,
+        occ_map=occ_map,
+        global_path=global_path,
         show=False,
-        save_gif=True
+        save_gif=True,
     )
 
 
