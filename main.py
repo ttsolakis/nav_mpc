@@ -39,7 +39,6 @@ def main():
     # Initial state
     x_init = np.array([-2.0, 0.0, 0.0, 0.0, 0.0])
     
-
     # Horizon, sampling time and total simulation time
     N    = 30    # steps
     dt   = 0.1   # seconds
