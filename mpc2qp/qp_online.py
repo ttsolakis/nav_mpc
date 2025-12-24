@@ -26,6 +26,9 @@ class QPWorkspace:
     Xbar: np.ndarray
     Ubar: np.ndarray
 
+    # Reference sequence
+    Xref: np.ndarray   # (N+1, nx)
+
     # Stage-wise evaluated dynamics
     Ad_all: np.ndarray
     Bd_all: np.ndarray
@@ -64,6 +67,7 @@ def make_workspace(
         q_new=q_init.copy(),
         Xbar=np.empty((N + 1, nx), dtype=float),
         Ubar=np.empty((N, nu), dtype=float),
+        Xref=np.empty((N + 1, nx), dtype=float),
         Ad_all=np.empty((N, nx, nx), dtype=float),
         Bd_all=np.empty((N, nx, nu), dtype=float),
         cd_all=np.empty((N, nx), dtype=float),
@@ -200,6 +204,7 @@ def _fill_objective_inplace(
     idx_Px: np.ndarray,   # (N+1, nx, nx) upper-tri entries valid for j>=i
     idx_Pu: np.ndarray,   # (N,   nu, nu) upper-tri entries valid for j>=i
     Xbar: np.ndarray,     # (N+1, nx)
+    Xref: np.ndarray,     # (N+1, nx)
     N: int,
     nx: int,
     nu: int,
@@ -230,9 +235,10 @@ def _fill_objective_inplace(
     # stage costs for k=0..N-1
     for k in range(N):
         xk = Xbar[k, :]
+        rk = Xref[k, :]
 
-        e0 = e_fun(xk)      # (nx,)
-        E = Ex_fun(xk)      # (nx,nx)
+        e0 = e_fun(xk, rk)  
+        E  = Ex_fun(xk, rk) 
 
         b = e0 - E @ xk     # (nx,)
         Px = E.T @ Q @ E    # (nx,nx)
@@ -248,9 +254,10 @@ def _fill_objective_inplace(
 
     # terminal k=N
     xN = Xbar[N, :]
+    rN = Xref[N,:]
 
-    e0 = e_fun(xN)
-    E = Ex_fun(xN)
+    e0 = e_fun(xN, rN)
+    E = Ex_fun(xN, rN)
 
     b = e0 - E @ xN
     Px = E.T @ QN @ E
@@ -280,6 +287,7 @@ def update_qp(
     U: np.ndarray,
     qp,
     ws: QPWorkspace,
+    Xref_seq: np.ndarray
 ) -> None:
     """
     Fast QP update:
@@ -295,6 +303,9 @@ def update_qp(
     nu = U.shape[1]
     nc = qp.idx_Gx.shape[1]
     n_eq = (N + 1) * nx
+
+    # 0) Set reference sequence
+    ws.Xref[:, :] = Xref_seq
 
     # 1) Shift linearization sequences
     shift_state_sequence_inplace(X, ws.Xbar)
@@ -351,6 +362,7 @@ def update_qp(
         idx_Px=qp.idx_Px,
         idx_Pu=qp.idx_Pu,
         Xbar=ws.Xbar,
+        Xref=ws.Xref,
         N=N,
         nx=nx,
         nu=nu,

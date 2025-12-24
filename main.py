@@ -16,6 +16,77 @@ from simulation.environment.occupancy_map import OccupancyMapConfig, OccupancyMa
 from simulation.lidar import LidarSimulator2D, LidarConfig
 from simulation.path_generators import rrt_star_plan, RRTStarConfig
 
+def build_Xref_from_path_local(
+    global_path: np.ndarray,
+    x: np.ndarray,
+    N: int,
+    path_idx: int,
+    window: int = 40,
+) -> tuple[np.ndarray, int]:
+    """
+    Build horizon reference Xref_seq (N+1, nx) from a polyline path,
+    using a local forward search window to update a *monotone* path_idx.
+
+    - Searches only in [path_idx, path_idx + window] (clamped to path length)
+    - Updates path_idx to the nearest waypoint in that window
+    - Enforces monotonicity: path_idx never decreases (prevents oscillations)
+
+    Returns:
+      Xref_seq, new_path_idx
+    """
+    assert global_path.ndim == 2 and global_path.shape[1] == 2
+    M = global_path.shape[0]
+    nx = x.shape[0]
+
+    # clamp incoming index
+    path_idx = int(max(0, min(path_idx, M - 1)))
+
+    # search window bounds
+    i_start = path_idx
+    i_end = min(M, path_idx + window + 1)  # +1 because Python slicing excludes end
+
+    # local nearest in window
+    p = np.array([x[0], x[1]], dtype=float)
+    segment = global_path[i_start:i_end]  # (S,2)
+    if segment.shape[0] == 0:
+        # degenerate (shouldn't happen), fallback
+        i0 = path_idx
+    else:
+        d2 = np.sum((segment - p[None, :]) ** 2, axis=1)
+        i0 = i_start + int(np.argmin(d2))
+
+    # enforce monotone (nearest-ahead)
+    if i0 < path_idx:
+        i0 = path_idx
+
+    new_path_idx = i0
+
+    # Build Xref by taking the next N+1 waypoints starting from new_path_idx
+    Xref = np.zeros((N + 1, nx), dtype=float)
+    for k in range(N + 1):
+        idx = min(new_path_idx + k, M - 1)
+        Xref[k, 0] = global_path[idx, 0]
+        Xref[k, 1] = global_path[idx, 1]
+        # keep omega refs at 0 for now
+        Xref[k, 3] = 0.0
+        Xref[k, 4] = 0.0
+
+    # Heading reference from forward differences
+    for k in range(N):
+        dx = Xref[k + 1, 0] - Xref[k, 0]
+        dy = Xref[k + 1, 1] - Xref[k, 1]
+        Xref[k, 2] = np.arctan2(dy, dx)
+
+    # terminal heading: repeat last
+    if N > 0:
+        Xref[N, 2] = Xref[N - 1, 2]
+    else:
+        Xref[N, 2] = float(x[2])
+
+    return Xref, new_path_idx
+
+
+
 def main():
 
     # -----------------------------------
@@ -23,8 +94,8 @@ def main():
     # -----------------------------------
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
-    from problem_setup import setup_simple_rover
-    problem_name, system, objective, constraints, animation = setup_simple_rover.setup_problem()
+    from problem_setup import setup_path_tracking_rover
+    problem_name, system, objective, constraints, animation = setup_path_tracking_rover.setup_problem()
 
     print(f"Setting up: {problem_name}")
 
@@ -37,12 +108,15 @@ def main():
     embedded = True
     
     # Initial state
-    x_init = np.array([-2.0, 0.0, 0.0, 0.0, 0.0])
+    x_init = np.array([-1.0, -2.0, np.pi/2, 0.0, 0.0])
+
+    # Goal state
+    x_goal= np.array([2.0, 2.0, 0.0, 0.0, 0.0])
     
     # Horizon, sampling time and total simulation time
-    N    = 30    # steps
+    N    = 20    # steps
     dt   = 0.1   # seconds
-    tsim = 15.0  # seconds
+    tsim = 10.0  # seconds
 
     # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
@@ -99,6 +173,9 @@ def main():
     # Initial state
     x = x_init.copy()
 
+    # Reference state sequence (N+1, nx)
+    Xref_seq = np.tile(x_goal.reshape(1, -1), (N + 1, 1))
+
     # Initialize OSQP solver
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
@@ -107,7 +184,7 @@ def main():
     ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
     X = np.zeros((N+1, nx))
     U = np.zeros((N,   nu))
-    update_qp(prob, x, X, U, qp, ws)  
+    update_qp(prob, x, X, U, qp, ws, Xref_seq)
     
     # Store data for plotting & animation
     x_traj = [x.copy()]   
@@ -119,10 +196,11 @@ def main():
     print("Computing global path to goal...")
     robot_radius = 0.15
     margin = 0.10
-    inflation = robot_radius + margin
+    path_idx = 0
+    ref_window = 40  # tune this
     start_xy = x_init[:2]
-    goal_xy  = objective.x_ref[:2] 
-    global_path = rrt_star_plan(occ_map=occ_map, start_xy=start_xy, goal_xy=goal_xy, inflation_radius_m=inflation, cfg=rrt_cfg)
+    goal_xy  = x_goal[:2] 
+    global_path = rrt_star_plan(occ_map=occ_map, start_xy=start_xy, goal_xy=goal_xy, inflation_radius_m=robot_radius+margin, cfg=rrt_cfg)
     print(f"[RRT*] Path waypoints: {global_path.shape[0]}")
 
     print("Running main loop...")
@@ -130,10 +208,12 @@ def main():
     nsim = int(tsim/dt)
     for i in range(nsim):
 
-        # 1) Evaluate QP around new (x0, x̄, ū)
+        # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
 
-        update_qp(prob, x, X, U, qp, ws)
+        Xref_seq, path_idx = build_Xref_from_path_local(global_path=global_path, x=x, N=N, path_idx=path_idx, window=ref_window)
+
+        update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
         end_eQP_time = time.perf_counter()
 
@@ -188,7 +268,7 @@ def main():
         dt=dt,
         x_traj=x_traj,
         u_traj=u_traj,
-        x_goal=objective.x_ref,
+        x_goal=x_goal,
         X_pred_traj=X_pred_traj,
         lidar_scans=scans,
         occ_map=occ_map,

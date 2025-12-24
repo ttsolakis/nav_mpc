@@ -390,8 +390,8 @@ def animate_rover(
 
     # Global path (static)
     if global_path is not None and global_path.shape[0] >= 1:
-        ax_xy.plot(global_path[:, 0], global_path[:, 1], linewidth=GP_LINE_WIDTH, linestyle="--", color="#ffd83d", alpha=0.6, label="global path")
-        ax_xy.scatter(global_path[:, 0], global_path[:, 1], s=GP_MARKER_SIZE, color="#ffd83d", alpha=0.6, label="waypoints")
+        ax_xy.plot(global_path[:, 0], global_path[:, 1], linewidth=GP_LINE_WIDTH, linestyle="--", color="#ff7f0e", alpha=0.5, label="global path")
+        ax_xy.scatter(global_path[:, 0], global_path[:, 1], s=GP_MARKER_SIZE, color="#ff7f0e", alpha=0.5, label="waypoints")
 
     # Start + goal
     ax_xy.plot(px[0], py[0], marker=".", markersize=3, linestyle="None", label="start")

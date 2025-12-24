@@ -186,29 +186,28 @@ def _build_linearized_inequality_kernels(system: SystemModel, constraints: Syste
 
 def _build_linearized_error_kernels(system: SystemModel, objective: Objective):
     """
-    Build compiled kernels for nonlinear error e(x) and its Jacobian E(x)=de/dx.
-
-    Returns:
-      e_fun(x)  -> (nx,)
-      Ex_fun(x) -> (nx,nx)
+    Build compiled kernels for nonlinear error e(x, r) and its Jacobian Ex(x, r)=de/dx.
     """
     x_sym = system.state_symbolic()  # (nx,1)
+    r_sym = objective.r_sym          # (nx,1)  <-- NEW
 
-    e_sym = objective.state_error_symbolic()  # returns (nx,1)
-    Ex_sym = e_sym.jacobian(x_sym)            # (nx,nx)
+    e_sym = objective.state_error_symbolic()  # depends on x and r
+    Ex_sym = e_sym.jacobian(x_sym)
 
-    args = list(x_sym)
+    args = list(x_sym) + list(r_sym)
 
     e_core = autowrap(e_sym, args=args, backend="cython")
     Ex_core = autowrap(Ex_sym, args=args, backend="cython")
 
-    def e_fun(x: np.ndarray) -> np.ndarray:
+    def e_fun(x: np.ndarray, r: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float).reshape(-1)
-        return np.asarray(e_core(*x), dtype=float).reshape(-1)
+        r = np.asarray(r, dtype=float).reshape(-1)
+        return np.asarray(e_core(*x, *r), dtype=float).reshape(-1)
 
-    def Ex_fun(x: np.ndarray) -> np.ndarray:
+    def Ex_fun(x: np.ndarray, r: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float).reshape(-1)
-        return np.asarray(Ex_core(*x), dtype=float)
+        r = np.asarray(r, dtype=float).reshape(-1)
+        return np.asarray(Ex_core(*x, *r), dtype=float)
 
     return e_fun, Ex_fun
 
