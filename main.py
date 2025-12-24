@@ -255,6 +255,7 @@ def main():
     x_traj = [x.copy()]   
     u_traj = [] 
     X_pred_traj = []
+    X_ref_traj = []
     scans = []
 
     # Compute global path to goal
@@ -266,7 +267,7 @@ def main():
     start_xy = x_init[:2]
     goal_xy  = x_goal[:2] 
     global_path = rrt_star_plan(occ_map=occ_map, start_xy=start_xy, goal_xy=goal_xy, inflation_radius_m=robot_radius+margin, cfg=rrt_cfg)
-    global_path = smooth_and_resample_path(global_path, ds= 0.2, smoothing=0.01, k=3)
+    global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.01, k=3)
 
     print("Running main loop...")
 
@@ -307,6 +308,7 @@ def main():
         x_traj.append(x.copy())
         u_traj.append(u0.copy())
         X_pred_traj.append(X.copy())
+        X_ref_traj.append(Xref_seq.copy()) 
         scan = lidar.scan(np.array([float(x[0]), float(x[1]), float(x[2])], dtype=float))
         scans.append(scan)
 
@@ -335,6 +337,7 @@ def main():
         u_traj=u_traj,
         x_goal=x_goal,
         X_pred_traj=X_pred_traj,
+        X_ref_traj=X_ref_traj, 
         lidar_scans=scans,
         occ_map=occ_map,
         global_path=global_path,

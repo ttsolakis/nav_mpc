@@ -45,14 +45,14 @@ class SimpleRoverObjective(Objective):
         # -------------------------
         if Q is None:
             # [px, py, phi, omega_l, omega_r]
-            Q = 5*np.diag([10.0, 10.0, 10.0, 1e-7, 1e-7])
+            Q = 5*np.diag([5.0, 5.0, 1e-7, 1e-7, 1e-7])
 
         if QN is None:
-            QN = 5*np.diag([10.0, 10.0, 10.0, 5.0, 5.0])
+            QN = 5*np.diag([10.0, 10.0, 1e-7, 5.0, 5.0])
 
         if R is None:
             # input effort (wheel accel)
-            R = np.diag([2.0, 2.0])
+            R = np.diag([1.0, 1.0])
 
         if x_goal is None:
             x_goal = np.array([0.0, 1.0, np.pi/2, 0.0, 0.0])

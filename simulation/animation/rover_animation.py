@@ -115,6 +115,22 @@ def _extract_pred_list(kwargs: dict) -> list[np.ndarray] | None:
                 return [arr[i] for i in range(arr.shape[0])]
     return None
 
+def _extract_ref_list(kwargs: dict) -> list[np.ndarray] | None:
+    """
+    Reference horizons per control cycle.
+    Expected each element: array of shape (N+1, nx) for that cycle.
+    """
+    for key in ("X_ref_traj", "X_ref_list", "Xref_traj", "Xrefs"):
+        if key in kwargs and kwargs[key] is not None:
+            ref = kwargs[key]
+            if isinstance(ref, list):
+                return ref
+            arr = np.asarray(ref, dtype=float)
+            # allow (T, N+1, nx)
+            if arr.ndim == 3:
+                return [arr[i] for i in range(arr.shape[0])]
+    return None
+
 
 def _extract_scan_list(kwargs: dict) -> list | None:
     """
@@ -275,6 +291,7 @@ def animate_rover(
       - wheel speeds
     """
     X_pred_list = _extract_pred_list(kwargs)
+    X_ref_list  = _extract_ref_list(kwargs)
     scan_list = _extract_scan_list(kwargs)
     occ_img, occ_extent = _maybe_load_occ_background(kwargs)
     global_path = _extract_global_path(kwargs)
@@ -401,6 +418,8 @@ def animate_rover(
     (trail_line,) = ax_xy.plot([], [], linestyle="--", color="#008000", linewidth=1.5, label="trajectory")
     (plan_line,) = ax_xy.plot([], [], linewidth=PLAN_LINE_WIDTH, color="#0058ca", linestyle="dotted", label="plan (current)")
     lidar_scatter = ax_xy.scatter([], [], s=LIDAR_POINT_SIZE, marker=".", color="#b11010", alpha=0.8, label="lidar")
+    (ref_line,) = ax_xy.plot([], [], linewidth=2.0, linestyle="-", color="#ff00d4", alpha=0.9, label="reference (current)")
+    ref_scatter = ax_xy.scatter([], [], s=25, marker="o", color="#ff00d4", alpha=0.9, label="ref points")
 
     body_poly = Polygon(
         _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
@@ -485,6 +504,23 @@ def animate_rover(
             _set_body(gp, float(pred[ii, 0]), float(pred[ii, 1]), float(_wrap_to_pi(np.array([pred[ii, 2]])).item()))
             gp.set_visible(True)
 
+    def _set_reference(step_k: int) -> None:
+        if X_ref_list is None:
+            ref_line.set_data([], [])
+            ref_scatter.set_offsets(np.empty((0, 2)))
+            return
+
+        last_cycle = min(max(step_k, 0), len(X_ref_list) - 1)
+        ref = np.asarray(X_ref_list[last_cycle], dtype=float)
+
+        if ref.ndim != 2 or ref.shape[1] < 2:
+            ref_line.set_data([], [])
+            ref_scatter.set_offsets(np.empty((0, 2)))
+            return
+
+        ref_line.set_data(ref[:, 0], ref[:, 1])
+        ref_scatter.set_offsets(ref[:, :2])
+
     def _set_lidar(step_k: int) -> None:
         if scan_list is None or step_k < 0 or step_k >= len(scan_list):
             lidar_scatter.set_offsets(np.empty((0, 2)))
@@ -498,6 +534,8 @@ def animate_rover(
         trail_line.set_data([], [])
         plan_line.set_data([], [])
         lidar_scatter.set_offsets(np.empty((0, 2)))
+        ref_line.set_data([], [])
+        ref_scatter.set_offsets(np.empty((0, 2)))
 
         _set_body(body_poly, float(px[0]), float(py[0]), float(phi[0]))
         _set_heading(float(px[0]), float(py[0]), float(phi[0]))
@@ -509,7 +547,7 @@ def animate_rover(
         for gp in ghost_polys:
             gp.set_visible(False)
 
-        artists = [trail_line, plan_line, lidar_scatter, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists = [trail_line, plan_line, ref_line, ref_scatter, lidar_scatter, body_poly, heading_line, time_text, w_l_line, w_r_line]
         artists.extend(ghost_polys)
         return tuple(artists)
 
@@ -522,12 +560,13 @@ def animate_rover(
 
         _set_plan_and_ghosts(step_k=k)
         _set_lidar(step_k=k)
+        _set_reference(step_k=k)
 
         w_l_line.set_data(t[: k + 1], omega_l[: k + 1])
         w_r_line.set_data(t[: k + 1], omega_r[: k + 1])
         time_text.set_text(f"t = {t_anim[frame_idx]:.2f} s")
 
-        artists = [trail_line, plan_line, lidar_scatter, body_poly, heading_line, time_text, w_l_line, w_r_line]
+        artists = [trail_line, plan_line, ref_line, ref_scatter, lidar_scatter, body_poly, heading_line, time_text, w_l_line, w_r_line]
         artists.extend(ghost_polys)
         return tuple(artists)
 
