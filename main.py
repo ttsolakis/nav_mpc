@@ -16,75 +16,140 @@ from simulation.environment.occupancy_map import OccupancyMapConfig, OccupancyMa
 from simulation.lidar import LidarSimulator2D, LidarConfig
 from simulation.path_generators import rrt_star_plan, RRTStarConfig
 
-def build_Xref_from_path_local(
+def build_reference_from_path(
     global_path: np.ndarray,
     x: np.ndarray,
     N: int,
     path_idx: int,
     window: int = 40,
+    max_lookahead_points: int | None = 12,
 ) -> tuple[np.ndarray, int]:
-    """
-    Build horizon reference Xref_seq (N+1, nx) from a polyline path,
-    using a local forward search window to update a *monotone* path_idx.
-
-    - Searches only in [path_idx, path_idx + window] (clamped to path length)
-    - Updates path_idx to the nearest waypoint in that window
-    - Enforces monotonicity: path_idx never decreases (prevents oscillations)
-
-    Returns:
-      Xref_seq, new_path_idx
-    """
     assert global_path.ndim == 2 and global_path.shape[1] == 2
     M = global_path.shape[0]
     nx = x.shape[0]
 
-    # clamp incoming index
     path_idx = int(max(0, min(path_idx, M - 1)))
-
-    # search window bounds
     i_start = path_idx
-    i_end = min(M, path_idx + window + 1)  # +1 because Python slicing excludes end
+    i_end = min(M, path_idx + window + 1)
 
-    # local nearest in window
     p = np.array([x[0], x[1]], dtype=float)
-    segment = global_path[i_start:i_end]  # (S,2)
+    segment = global_path[i_start:i_end]
     if segment.shape[0] == 0:
-        # degenerate (shouldn't happen), fallback
         i0 = path_idx
     else:
         d2 = np.sum((segment - p[None, :]) ** 2, axis=1)
         i0 = i_start + int(np.argmin(d2))
 
-    # enforce monotone (nearest-ahead)
     if i0 < path_idx:
         i0 = path_idx
-
     new_path_idx = i0
 
-    # Build Xref by taking the next N+1 waypoints starting from new_path_idx
+    # limit how far ahead we reference (prevents "runaway" horizon)
+    if max_lookahead_points is None:
+        i_max = M - 1
+    else:
+        i_max = min(M - 1, new_path_idx + int(max_lookahead_points))
+
     Xref = np.zeros((N + 1, nx), dtype=float)
     for k in range(N + 1):
-        idx = min(new_path_idx + k, M - 1)
+        idx = min(new_path_idx + k, i_max)  # <-- clamp by i_max
         Xref[k, 0] = global_path[idx, 0]
         Xref[k, 1] = global_path[idx, 1]
-        # keep omega refs at 0 for now
         Xref[k, 3] = 0.0
         Xref[k, 4] = 0.0
 
-    # Heading reference from forward differences
     for k in range(N):
         dx = Xref[k + 1, 0] - Xref[k, 0]
         dy = Xref[k + 1, 1] - Xref[k, 1]
-        Xref[k, 2] = np.arctan2(dy, dx)
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            Xref[k, 2] = Xref[k - 1, 2] if k > 0 else float(x[2])
+        else:
+            Xref[k, 2] = np.arctan2(dy, dx)
 
-    # terminal heading: repeat last
-    if N > 0:
-        Xref[N, 2] = Xref[N - 1, 2]
-    else:
-        Xref[N, 2] = float(x[2])
+    Xref[N, 2] = Xref[N - 1, 2] if N > 0 else float(x[2])
 
     return Xref, new_path_idx
 
+
+
+# Add these imports at the top of nav_mpc/main.py
+from scipy.interpolate import splprep, splev
+
+def smooth_and_resample_path(
+    path_xy: np.ndarray,
+    *,
+    ds: float = 0.05,
+    smoothing: float = 0.01,
+    k: int = 3,
+    dense_factor: int = 30,
+) -> np.ndarray:
+    """
+    Fit a parametric spline to path_xy and resample points approximately equidistant
+    in arc-length with spacing ds.
+
+    Args:
+        path_xy: (M,2) polyline waypoints
+        ds: desired spacing [m] between consecutive resampled points (geometry-based)
+        smoothing: splprep smoothing factor s
+        k: spline degree
+        dense_factor: internal oversampling factor to build arc-length map
+
+    Returns:
+        path_resampled: (K,2) points with ~ds spacing along arc-length.
+    """
+    path_xy = np.asarray(path_xy, dtype=float)
+    if path_xy.ndim != 2 or path_xy.shape[1] != 2:
+        raise ValueError(f"path_xy must be (M,2), got {path_xy.shape}")
+    if ds <= 0:
+        raise ValueError("ds must be > 0")
+
+    # Remove consecutive duplicates
+    diffs = np.diff(path_xy, axis=0)
+    keep = np.ones(path_xy.shape[0], dtype=bool)
+    keep[1:] = np.linalg.norm(diffs, axis=1) > 1e-9
+    path_xy = path_xy[keep]
+
+    if path_xy.shape[0] < 2:
+        raise ValueError("Need at least 2 distinct points to fit a spline.")
+
+    # spline degree constraints: splprep requires m > k
+    k = int(np.clip(k, 1, 5))
+    k = min(k, path_xy.shape[0] - 1)
+
+    x = path_xy[:, 0]
+    y = path_xy[:, 1]
+
+    # Fit parametric spline: x(u), y(u)
+    tck, _ = splprep([x, y], s=float(smoothing), k=k)
+
+    # Dense sampling in u to build an arc-length map
+    M = path_xy.shape[0]
+    n_dense = max(300, dense_factor * M)
+    u_dense = np.linspace(0.0, 1.0, n_dense)
+    x_dense, y_dense = splev(u_dense, tck)
+    dense = np.column_stack([x_dense, y_dense])
+
+    seg = np.diff(dense, axis=0)
+    seglen = np.linalg.norm(seg, axis=1)
+    s_cum = np.concatenate([[0.0], np.cumsum(seglen)])
+    L = float(s_cum[-1])
+
+    if L < 1e-9:
+        return dense[:1].copy()
+
+    # Target arc-length positions: 0, ds, 2ds, ...
+    s_targets = np.arange(0.0, L, ds)
+    if s_targets.size == 0 or s_targets[-1] < L:
+        s_targets = np.append(s_targets, L)
+
+    # Invert s(u) via interpolation on dense samples
+    u_targets = np.interp(s_targets, s_cum, u_dense)
+
+    # Evaluate spline at u_targets
+    x_out, y_out = splev(u_targets, tck)
+    out = np.column_stack([x_out, y_out])
+
+    return out
 
 
 def main():
@@ -116,7 +181,7 @@ def main():
     # Horizon, sampling time and total simulation time
     N    = 20    # steps
     dt   = 0.1   # seconds
-    tsim = 10.0  # seconds
+    tsim = 40.0  # seconds
 
     # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
@@ -201,7 +266,7 @@ def main():
     start_xy = x_init[:2]
     goal_xy  = x_goal[:2] 
     global_path = rrt_star_plan(occ_map=occ_map, start_xy=start_xy, goal_xy=goal_xy, inflation_radius_m=robot_radius+margin, cfg=rrt_cfg)
-    print(f"[RRT*] Path waypoints: {global_path.shape[0]}")
+    global_path = smooth_and_resample_path(global_path, ds= 0.2, smoothing=0.01, k=3)
 
     print("Running main loop...")
 
@@ -211,7 +276,7 @@ def main():
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
 
-        Xref_seq, path_idx = build_Xref_from_path_local(global_path=global_path, x=x, N=N, path_idx=path_idx, window=ref_window)
+        Xref_seq, path_idx = build_reference_from_path(global_path=global_path, x=x, N=N, path_idx=path_idx, window=ref_window, max_lookahead_points=12)
 
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
