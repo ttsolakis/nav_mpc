@@ -176,7 +176,7 @@ def main():
     x_init = np.array([-1.0, -2.0, np.pi/2, 0.0, 0.0])
 
     # Goal state
-    x_goal= np.array([2.0, 2.0, 0.0, 0.0, 0.0])
+    x_goal= np.array([2.0, 2.0, 0.0, 10.0, 10.0])
     
     # Horizon, sampling time and total simulation time
     N    = 20    # steps
