@@ -11,7 +11,6 @@ class RoverPathTrackingObjective(Objective):
     def __init__(
         self,
         system: SystemModel,
-        x_goal: np.ndarray | None = None,   # only for plotting / terminal default
         Q: np.ndarray | None = None,
         R: np.ndarray | None = None,
         QN: np.ndarray | None = None,
@@ -29,13 +28,11 @@ class RoverPathTrackingObjective(Objective):
         nu = system.input_dim
 
         if Q is None:
-            Q = 5 * np.diag([10.0, 10.0, 10.0, 1e-7, 1e-7])
+            Q = np.diag([50.0, 50.0, 10.0, 1.0, 1.0])
         if QN is None:
-            QN = 5 * np.diag([10.0, 10.0, 10.0, 5.0, 5.0])
+            QN = np.diag([100.0, 100.0, 50.0, 0.1, 0.1])
         if R is None:
-            R = np.diag([2.0, 2.0])
-        if x_goal is None:
-            x_goal = np.array([0.0, 1.0, np.pi/2, 0.0, 0.0])
+            R = np.diag([1.0, 1.0])
         if u_ref is None:
             u_ref = np.zeros(nu)
 
@@ -46,8 +43,6 @@ class RoverPathTrackingObjective(Objective):
         # constant input reference (kept simple)
         self.u_ref = np.asarray(u_ref, dtype=float).reshape(nu)
 
-        # just for plotting / default goal, NOT used symbolically
-        self.x_ref = np.asarray(x_goal, dtype=float).reshape(nx)
 
         # heading knobs
         self.phi_goal_switch_dist = float(phi_goal_switch_dist)

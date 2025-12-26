@@ -418,8 +418,8 @@ def animate_rover(
     (trail_line,) = ax_xy.plot([], [], linestyle="--", color="#008000", linewidth=1.5, label="trajectory")
     (plan_line,) = ax_xy.plot([], [], linewidth=PLAN_LINE_WIDTH, color="#0058ca", linestyle="dotted", label="plan (current)")
     lidar_scatter = ax_xy.scatter([], [], s=LIDAR_POINT_SIZE, marker=".", color="#b11010", alpha=0.8, label="lidar")
-    (ref_line,) = ax_xy.plot([], [], linewidth=2.0, linestyle="-", color="#ff00d4", alpha=0.9, label="reference (current)")
-    ref_scatter = ax_xy.scatter([], [], s=25, marker="o", color="#ff00d4", alpha=0.9, label="ref points")
+    (ref_line,) = ax_xy.plot([], [], linewidth=2.0, linestyle="-", color="#72498D", alpha=0.1, label="reference (current)")
+    ref_scatter = ax_xy.scatter([], [], s=25, marker="o", color="#72498D", alpha=0.1, label="ref points")
 
     body_poly = Polygon(
         _square_body_vertices(float(px[0]), float(py[0]), float(phi[0]), half_side),
@@ -457,8 +457,8 @@ def animate_rover(
     ax_w.set_xlim(float(t[0]), float(t[-1]))
     ax_w.set_ylim(-1.1 * wabs, 1.1 * wabs)
     ax_w.axhline(0.0, color="k", linewidth=0.8, alpha=0.8)
-    ax_w.axhline(float(wmin), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
-    ax_w.axhline(float(wmax), linestyle="--", linewidth=1.0, color="k", alpha=0.3)
+    ax_w.axhline(float(wmin), linestyle="--", linewidth=1.5, color="#b11010", alpha=0.3)
+    ax_w.axhline(float(wmax), linestyle="--", linewidth=1.5, color="#b11010", alpha=0.3)
 
     (w_l_line,) = ax_w.plot([], [], linewidth=2, label=r"$\omega_l$")
     (w_r_line,) = ax_w.plot([], [], linewidth=2, label=r"$\omega_r$")

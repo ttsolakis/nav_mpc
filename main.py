@@ -23,53 +23,125 @@ def build_reference_from_path(
     path_idx: int,
     window: int = 40,
     max_lookahead_points: int | None = 12,
+    *,
+    omega_ref: tuple[float, float] = (0.0, 0.0),
+    goal_xy: np.ndarray | None = None,
+    stop_radius: float = 0.25,
+    stop_ramp: float = 0.50,
 ) -> tuple[np.ndarray, int]:
-    assert global_path.ndim == 2 and global_path.shape[1] == 2
-    M = global_path.shape[0]
-    nx = x.shape[0]
+    """
+    Build a (N+1,nx) reference horizon from a 2D global path.
 
-    path_idx = int(max(0, min(path_idx, M - 1)))
+    - Finds the closest waypoint to current robot position, but ONLY in a forward window
+      starting at `path_idx` (prevents searching from scratch every time).
+    - Enforces monotonic progress (new index never goes backwards).
+    - Limits lookahead points to avoid "runaway" references.
+    - Sets reference wheel speeds to omega_ref while tracking, but smoothly fades them to 0
+      near the final goal (or path end) so the rover stops instead of circling.
+
+    Args:
+        global_path: (M,2) array of [x,y] path samples (already smoothed/resampled).
+        x: current state (nx,), expected at least [px,py,phi,omega_l,omega_r].
+        N: MPC horizon steps.
+        path_idx: last chosen path index (monotonic memory).
+        window: search window size forward from path_idx.
+        max_lookahead_points: maximum number of points ahead to use in the horizon.
+        omega_ref: desired cruise wheel speeds (omega_l_ref, omega_r_ref).
+        goal_xy: (2,) final goal position. If None, will use path end for stopping logic.
+        stop_radius: within this distance, omega_ref becomes 0.
+        stop_ramp: ramp length (meters) to fade omega_ref from full to 0.
+
+    Returns:
+        Xref: (N+1,nx) reference state sequence.
+        new_path_idx: updated monotonic path index.
+    """
+    global_path = np.asarray(global_path, dtype=float)
+    if global_path.ndim != 2 or global_path.shape[1] != 2:
+        raise ValueError(f"global_path must be (M,2), got {global_path.shape}")
+    if global_path.shape[0] < 1:
+        raise ValueError("global_path is empty")
+
+    x = np.asarray(x, dtype=float).reshape(-1)
+    nx = x.shape[0]
+    M = global_path.shape[0]
+
+    # --- clamp incoming index ---
+    path_idx = int(max(0, min(int(path_idx), M - 1)))
+
+    # --- local forward search for closest waypoint ---
     i_start = path_idx
-    i_end = min(M, path_idx + window + 1)
+    i_end = min(M, path_idx + int(window) + 1)
 
     p = np.array([x[0], x[1]], dtype=float)
     segment = global_path[i_start:i_end]
+
     if segment.shape[0] == 0:
         i0 = path_idx
     else:
         d2 = np.sum((segment - p[None, :]) ** 2, axis=1)
         i0 = i_start + int(np.argmin(d2))
 
+    # enforce monotonic (no going backwards)
     if i0 < path_idx:
         i0 = path_idx
     new_path_idx = i0
 
-    # limit how far ahead we reference (prevents "runaway" horizon)
+    # --- clamp horizon length in terms of path indices ---
     if max_lookahead_points is None:
         i_max = M - 1
     else:
         i_max = min(M - 1, new_path_idx + int(max_lookahead_points))
 
+    # --- compute speed reference scaling near goal / end-of-path ---
+    wL_ref, wR_ref = float(omega_ref[0]), float(omega_ref[1])
+
+    # choose what to stop against: explicit goal or path end
+    if goal_xy is not None:
+        goal_xy = np.asarray(goal_xy, dtype=float).reshape(2)
+        gx, gy = float(goal_xy[0]), float(goal_xy[1])
+    else:
+        gx, gy = float(global_path[-1, 0]), float(global_path[-1, 1])
+
+    dist_goal = float(np.hypot(x[0] - gx, x[1] - gy))
+
+    if stop_ramp < 1e-9:
+        scale = 0.0 if dist_goal <= stop_radius else 1.0
+    else:
+        if dist_goal <= stop_radius:
+            scale = 0.0
+        else:
+            # linear ramp: 0 at stop_radius, 1 at stop_radius+stop_ramp
+            scale = (dist_goal - stop_radius) / stop_ramp
+            scale = float(np.clip(scale, 0.0, 1.0))
+
+    wL_ref *= scale
+    wR_ref *= scale
+
+    # --- build reference horizon ---
     Xref = np.zeros((N + 1, nx), dtype=float)
+
     for k in range(N + 1):
-        idx = min(new_path_idx + k, i_max)  # <-- clamp by i_max
+        idx = min(new_path_idx + k, i_max)
         Xref[k, 0] = global_path[idx, 0]
         Xref[k, 1] = global_path[idx, 1]
-        Xref[k, 3] = 0.0
-        Xref[k, 4] = 0.0
+        if nx >= 4:
+            Xref[k, 3] = wL_ref
+        if nx >= 5:
+            Xref[k, 4] = wR_ref
 
+    # --- heading reference from path tangent ---
+    # (uses forward difference; holds last heading at the end)
     for k in range(N):
         dx = Xref[k + 1, 0] - Xref[k, 0]
         dy = Xref[k + 1, 1] - Xref[k, 1]
         if abs(dx) < 1e-9 and abs(dy) < 1e-9:
             Xref[k, 2] = Xref[k - 1, 2] if k > 0 else float(x[2])
         else:
-            Xref[k, 2] = np.arctan2(dy, dx)
+            Xref[k, 2] = float(np.arctan2(dy, dx))
 
     Xref[N, 2] = Xref[N - 1, 2] if N > 0 else float(x[2])
 
     return Xref, new_path_idx
-
 
 
 # Add these imports at the top of nav_mpc/main.py
@@ -179,9 +251,9 @@ def main():
     x_goal= np.array([2.0, 2.0, 0.0, 10.0, 10.0])
     
     # Horizon, sampling time and total simulation time
-    N    = 20    # steps
+    N    = 25    # steps
     dt   = 0.1   # seconds
-    tsim = 40.0  # seconds
+    tsim = 30.0  # seconds
 
     # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
@@ -277,7 +349,7 @@ def main():
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
 
-        Xref_seq, path_idx = build_reference_from_path(global_path=global_path, x=x, N=N, path_idx=path_idx, window=ref_window, max_lookahead_points=12)
+        Xref_seq, path_idx = build_reference_from_path(global_path=global_path, x=x, N=N, path_idx=path_idx, window=ref_window, max_lookahead_points=N, omega_ref=(x_goal[3], x_goal[4]), goal_xy=x_goal[:2], stop_radius=0.25, stop_ramp=0.50)
 
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
@@ -318,6 +390,11 @@ def main():
         if profiling and i > 0:
             update_timing_stats(printing=False, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
 
+        # 6) Check goal reached
+        if (x[0]-x_goal[0])**2 + (x[1]-x_goal[1])**2 < 0.1**2:
+            print(f"Goal reached at step {i}!")
+            break
+
     if profiling:
         print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, system_info=system_info)
 
@@ -326,7 +403,7 @@ def main():
     # ---------------------------------------- 
 
     print("Plotting and saving...")
-    plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=objective.x_ref, show=False)
+    plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_goal, show=False)
 
     print("Animating and saving...")
     animation(
