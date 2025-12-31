@@ -1,4 +1,4 @@
-# nav_mpc/simulation/path_generators/rrt_star.py
+# nav_mpc/simulation/path_following/rrt_star.py
 from __future__ import annotations
 
 from dataclasses import dataclass

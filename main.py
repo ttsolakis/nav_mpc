@@ -9,219 +9,12 @@ from mpc2qp import build_qp, make_workspace, update_qp, extract_solution
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from utils.print_solution import print_solution
 
-# Import simulation test harness components (simulation, plotting, sensing, guidance)
+# Import simulation test harness components (simulation, plotting, sensing, path following)
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
 from simulation.plotting.plotter import plot_state_input_trajectories
 from simulation.environment.occupancy_map import OccupancyMapConfig, OccupancyMap2D
 from simulation.lidar import LidarSimulator2D, LidarConfig
-from simulation.path_generators import rrt_star_plan, RRTStarConfig
-
-def build_reference_from_path(
-    global_path: np.ndarray,
-    x: np.ndarray,
-    N: int,
-    path_idx: int,
-    window: int = 40,
-    max_lookahead_points: int | None = 12,
-    *,
-    omega_ref: tuple[float, float] = (0.0, 0.0),
-    goal_xy: np.ndarray | None = None,
-    stop_radius: float = 0.25,
-    stop_ramp: float = 0.50,
-) -> tuple[np.ndarray, int]:
-    """
-    Build a (N+1,nx) reference horizon from a 2D global path.
-
-    - Finds the closest waypoint to current robot position, but ONLY in a forward window
-      starting at `path_idx` (prevents searching from scratch every time).
-    - Enforces monotonic progress (new index never goes backwards).
-    - Limits lookahead points to avoid "runaway" references.
-    - Sets reference wheel speeds to omega_ref while tracking, but smoothly fades them to 0
-      near the final goal (or path end) so the rover stops instead of circling.
-
-    Args:
-        global_path: (M,2) array of [x,y] path samples (already smoothed/resampled).
-        x: current state (nx,), expected at least [px,py,phi,omega_l,omega_r].
-        N: MPC horizon steps.
-        path_idx: last chosen path index (monotonic memory).
-        window: search window size forward from path_idx.
-        max_lookahead_points: maximum number of points ahead to use in the horizon.
-        omega_ref: desired cruise wheel speeds (omega_l_ref, omega_r_ref).
-        goal_xy: (2,) final goal position. If None, will use path end for stopping logic.
-        stop_radius: within this distance, omega_ref becomes 0.
-        stop_ramp: ramp length (meters) to fade omega_ref from full to 0.
-
-    Returns:
-        Xref: (N+1,nx) reference state sequence.
-        new_path_idx: updated monotonic path index.
-    """
-    global_path = np.asarray(global_path, dtype=float)
-    if global_path.ndim != 2 or global_path.shape[1] != 2:
-        raise ValueError(f"global_path must be (M,2), got {global_path.shape}")
-    if global_path.shape[0] < 1:
-        raise ValueError("global_path is empty")
-
-    x = np.asarray(x, dtype=float).reshape(-1)
-    nx = x.shape[0]
-    M = global_path.shape[0]
-
-    # --- clamp incoming index ---
-    path_idx = int(max(0, min(int(path_idx), M - 1)))
-
-    # --- local forward search for closest waypoint ---
-    i_start = path_idx
-    i_end = min(M, path_idx + int(window) + 1)
-
-    p = np.array([x[0], x[1]], dtype=float)
-    segment = global_path[i_start:i_end]
-
-    if segment.shape[0] == 0:
-        i0 = path_idx
-    else:
-        d2 = np.sum((segment - p[None, :]) ** 2, axis=1)
-        i0 = i_start + int(np.argmin(d2))
-
-    # enforce monotonic (no going backwards)
-    if i0 < path_idx:
-        i0 = path_idx
-    new_path_idx = i0
-
-    # --- clamp horizon length in terms of path indices ---
-    if max_lookahead_points is None:
-        i_max = M - 1
-    else:
-        i_max = min(M - 1, new_path_idx + int(max_lookahead_points))
-
-    # --- compute speed reference scaling near goal / end-of-path ---
-    wL_ref, wR_ref = float(omega_ref[0]), float(omega_ref[1])
-
-    # choose what to stop against: explicit goal or path end
-    if goal_xy is not None:
-        goal_xy = np.asarray(goal_xy, dtype=float).reshape(2)
-        gx, gy = float(goal_xy[0]), float(goal_xy[1])
-    else:
-        gx, gy = float(global_path[-1, 0]), float(global_path[-1, 1])
-
-    dist_goal = float(np.hypot(x[0] - gx, x[1] - gy))
-
-    if stop_ramp < 1e-9:
-        scale = 0.0 if dist_goal <= stop_radius else 1.0
-    else:
-        if dist_goal <= stop_radius:
-            scale = 0.0
-        else:
-            # linear ramp: 0 at stop_radius, 1 at stop_radius+stop_ramp
-            scale = (dist_goal - stop_radius) / stop_ramp
-            scale = float(np.clip(scale, 0.0, 1.0))
-
-    wL_ref *= scale
-    wR_ref *= scale
-
-    # --- build reference horizon ---
-    Xref = np.zeros((N + 1, nx), dtype=float)
-
-    for k in range(N + 1):
-        idx = min(new_path_idx + k, i_max)
-        Xref[k, 0] = global_path[idx, 0]
-        Xref[k, 1] = global_path[idx, 1]
-        if nx >= 4:
-            Xref[k, 3] = wL_ref
-        if nx >= 5:
-            Xref[k, 4] = wR_ref
-
-    # --- heading reference from path tangent ---
-    # (uses forward difference; holds last heading at the end)
-    for k in range(N):
-        dx = Xref[k + 1, 0] - Xref[k, 0]
-        dy = Xref[k + 1, 1] - Xref[k, 1]
-        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
-            Xref[k, 2] = Xref[k - 1, 2] if k > 0 else float(x[2])
-        else:
-            Xref[k, 2] = float(np.arctan2(dy, dx))
-
-    Xref[N, 2] = Xref[N - 1, 2] if N > 0 else float(x[2])
-
-    return Xref, new_path_idx
-
-
-# Add these imports at the top of nav_mpc/main.py
-from scipy.interpolate import splprep, splev
-
-def smooth_and_resample_path(
-    path_xy: np.ndarray,
-    *,
-    ds: float = 0.05,
-    smoothing: float = 0.01,
-    k: int = 3,
-    dense_factor: int = 30,
-) -> np.ndarray:
-    """
-    Fit a parametric spline to path_xy and resample points approximately equidistant
-    in arc-length with spacing ds.
-
-    Args:
-        path_xy: (M,2) polyline waypoints
-        ds: desired spacing [m] between consecutive resampled points (geometry-based)
-        smoothing: splprep smoothing factor s
-        k: spline degree
-        dense_factor: internal oversampling factor to build arc-length map
-
-    Returns:
-        path_resampled: (K,2) points with ~ds spacing along arc-length.
-    """
-    path_xy = np.asarray(path_xy, dtype=float)
-    if path_xy.ndim != 2 or path_xy.shape[1] != 2:
-        raise ValueError(f"path_xy must be (M,2), got {path_xy.shape}")
-    if ds <= 0:
-        raise ValueError("ds must be > 0")
-
-    # Remove consecutive duplicates
-    diffs = np.diff(path_xy, axis=0)
-    keep = np.ones(path_xy.shape[0], dtype=bool)
-    keep[1:] = np.linalg.norm(diffs, axis=1) > 1e-9
-    path_xy = path_xy[keep]
-
-    if path_xy.shape[0] < 2:
-        raise ValueError("Need at least 2 distinct points to fit a spline.")
-
-    # spline degree constraints: splprep requires m > k
-    k = int(np.clip(k, 1, 5))
-    k = min(k, path_xy.shape[0] - 1)
-
-    x = path_xy[:, 0]
-    y = path_xy[:, 1]
-
-    # Fit parametric spline: x(u), y(u)
-    tck, _ = splprep([x, y], s=float(smoothing), k=k)
-
-    # Dense sampling in u to build an arc-length map
-    M = path_xy.shape[0]
-    n_dense = max(300, dense_factor * M)
-    u_dense = np.linspace(0.0, 1.0, n_dense)
-    x_dense, y_dense = splev(u_dense, tck)
-    dense = np.column_stack([x_dense, y_dense])
-
-    seg = np.diff(dense, axis=0)
-    seglen = np.linalg.norm(seg, axis=1)
-    s_cum = np.concatenate([[0.0], np.cumsum(seglen)])
-    L = float(s_cum[-1])
-
-    if L < 1e-9:
-        return dense[:1].copy()
-
-    # Target arc-length positions: 0, ds, 2ds, ...
-    s_targets = np.arange(0.0, L, ds)
-    if s_targets.size == 0 or s_targets[-1] < L:
-        s_targets = np.append(s_targets, L)
-
-    # Invert s(u) via interpolation on dense samples
-    u_targets = np.interp(s_targets, s_cum, u_dense)
-
-    # Evaluate spline at u_targets
-    x_out, y_out = splev(u_targets, tck)
-    out = np.column_stack([x_out, y_out])
-
-    return out
+from simulation.path_following import RRTStarConfig, rrt_star_plan, smooth_and_resample_path, make_reference_builder
 
 
 def main():
@@ -244,11 +37,12 @@ def main():
     # Embedded setting (time-limited solver)
     embedded = True
     
-    # Initial state
-    x_init = np.array([-1.0, -2.0, np.pi/2, 0.0, 0.0])
+    # Initial & goal states
+    x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])
+    x_goal = np.array([2.0, 2.0, 0.0, 10.0, 10.0])
 
-    # Goal state
-    x_goal= np.array([2.0, 2.0, 0.0, 10.0, 10.0])
+    position_goal = x_goal[:2]
+
     
     # Horizon, sampling time and total simulation time
     N    = 25    # steps
@@ -266,6 +60,7 @@ def main():
 
     # Path generator configuration
     rrt_cfg = RRTStarConfig(max_iters=6000, step_size=0.10, neighbor_radius=0.30, goal_sample_rate=0.10, collision_check_step=0.02, seed=1)
+
 
     # -----------------------------------
     # ---------- QP Formulation ---------
@@ -285,7 +80,7 @@ def main():
     print(f"QP built in {int(divmod(end_bQP_time - start_bQP_time, 60)[0]):02} minutes {int(divmod(end_bQP_time - start_bQP_time, 60)[1]):02} seconds.")
 
     # -----------------------------------
-    # ------------ Main Loop ------------
+    # ------------ Initializations------------
     # -----------------------------------
 
     print("Initializations...")
@@ -322,24 +117,25 @@ def main():
     X = np.zeros((N+1, nx))
     U = np.zeros((N,   nu))
     update_qp(prob, x, X, U, qp, ws, Xref_seq)
-    
+
+    # ------------------------------------
+    # -------- Global Path Planning ------
+    # ------------------------------------
+    print("Computing global path to goal...")
+    global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=0.15+0.1, cfg=rrt_cfg)
+    global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.01, k=3)
+    ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, window=40, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
+
+    # -----------------------------------
+    # ------------ Main Loop ------------
+    # -----------------------------------
+
     # Store data for plotting & animation
     x_traj = [x.copy()]   
     u_traj = [] 
     X_pred_traj = []
     X_ref_traj = []
     scans = []
-
-    # Compute global path to goal
-    print("Computing global path to goal...")
-    robot_radius = 0.15
-    margin = 0.10
-    path_idx = 0
-    ref_window = 40  # tune this
-    start_xy = x_init[:2]
-    goal_xy  = x_goal[:2] 
-    global_path = rrt_star_plan(occ_map=occ_map, start_xy=start_xy, goal_xy=goal_xy, inflation_radius_m=robot_radius+margin, cfg=rrt_cfg)
-    global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.01, k=3)
 
     print("Running main loop...")
 
@@ -349,8 +145,7 @@ def main():
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
 
-        Xref_seq, path_idx = build_reference_from_path(global_path=global_path, x=x, N=N, path_idx=path_idx, window=ref_window, max_lookahead_points=N, omega_ref=(x_goal[3], x_goal[4]), goal_xy=x_goal[:2], stop_radius=0.25, stop_ramp=0.50)
-
+        Xref_seq = ref_builder(global_path=global_path, x=x, N=N, goal_xy=position_goal)
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
         end_eQP_time = time.perf_counter()
