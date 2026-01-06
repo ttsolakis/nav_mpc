@@ -24,8 +24,8 @@ def main():
     # -----------------------------------
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
-    from problem_setup import setup_path_tracking_rover
-    problem_name, system, objective, constraints, animation = setup_path_tracking_rover.setup_problem()
+    from problem_setup import setup_path_tracking_unicycle
+    problem_name, system, objective, constraints, animation = setup_path_tracking_unicycle.setup_problem()
 
     print(f"Setting up: {problem_name}")
 
@@ -39,13 +39,13 @@ def main():
     
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])
-    x_goal = np.array([2.0, 2.0, 0.0, 10.0, 10.0])
+    x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0])
     position_goal = x_goal[:2]
 
     # Horizon, sampling time and total simulation time
     N    = 25    # steps
     dt   = 0.1   # seconds
-    tsim = 30.0  # seconds
+    tsim = 15.0  # seconds
 
     # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
@@ -67,7 +67,7 @@ def main():
     # -------- Global Path Planning --------
     # --------------------------------------
 
-    print("Computing global path to goal and setup reference builders...")
+    print("Computing global path to goal and setup reference builder...")
 
     start_global_time = time.perf_counter()
 
@@ -112,8 +112,8 @@ def main():
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
     ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
-    X = np.zeros((N+1, nx))
-    U = np.zeros((N,   nu))
+    X = np.tile(x.reshape(1, -1), (N + 1, 1))
+    U = np.zeros((N, nu))
     update_qp(prob, x, X, U, qp, ws, Xref_seq)
 
     # Store data for profiling, plotting & animation
@@ -137,6 +137,8 @@ def main():
         start_eQP_time = time.perf_counter()
 
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N, goal_xy=position_goal)
+        Xref_seq[:, 3] = 1.0
+        Xref_seq[:, 4] = 0.0
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
         end_eQP_time = time.perf_counter()
