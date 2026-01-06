@@ -9,7 +9,7 @@ class PathReferenceBuilder:
     Generic receding-horizon reference builder from a 2D path.
 
     Key ideas:
-    - internal memory: self._path_idx (monotonic progress, no need to expose path_idx)
+    - internal memory: self._path_idx
     - only requires: global_path (M,2), current state x, horizon N
     - user specifies which state indices correspond to position (px, py)
     - optional: phi_idx to set a heading reference from path tangent
