@@ -1,3 +1,8 @@
+# nav_mpc/simulation/path_following/reference_builder.py
+# (or wherever your make_reference_builder currently lives)
+
+from __future__ import annotations
+
 import numpy as np
 from dataclasses import dataclass
 from typing import Iterable
@@ -8,35 +13,45 @@ class PathReferenceBuilder:
     """
     Generic receding-horizon reference builder from a 2D path.
 
-    By default:
-      - Only sets references for px, py (and phi if requested).
-      - Does NOT impose any reference on other state components.
-        (i.e., leaves them as NaN so your objective can ignore them,
-         or so you can choose how to handle them.)
+    Path-following assumes you may want references for:
+      - position: (px, py)
+      - heading:  phi  (path tangent)
+      - speed:    v    (cruise speed along the path)
+
+    Everything else is left "free" by default: we simply keep it equal to the
+    current state x so you don't accidentally drive it to zero.
+    (This avoids NaNs, which would break your compiled SymPy/Autowrap kernels.)
 
     Optional:
       - If you explicitly provide `zero_indices` and/or `fade_indices`,
-        then those indices can be forced/faded (useful for systems where you
-        do want to drive some states to 0 near the goal).
+        then those indices can be forced/faded (useful for specific systems).
     """
 
-    pos_idx: tuple[int, int] = (0, 1)          # which x entries are (px, py)
-    phi_idx: int | None = None                # heading index in x, if any
+    # --- indices into the system state vector x ---
+    pos_idx: tuple[int, int] = (0, 1)          # (px, py)
+    phi_idx: int | None = None                # heading index
+    v_idx: int | None = None                  # longitudinal speed index (if it's a STATE)
 
-    window: int = 40                          # forward search window
-    max_lookahead_points: int | None = None   # clamp horizon in path indices
+    # --- path search / horizon handling ---
+    window: int = 40
+    max_lookahead_points: int | None = None
 
-    stop_radius: float = 0.25                 # [m] distance where references become "stop"
-    stop_ramp: float = 0.50                   # [m] ramp length
+    # --- stop behavior near goal (mainly for v reference) ---
+    stop_radius: float = 0.25
+    stop_ramp: float = 0.50
 
-    # IMPORTANT: by default these are None -> we DO NOT touch other states
+    # --- speed reference ---
+    v_ref: float = 0.0                        # desired cruise speed [m/s]
+    stop_v: bool = True                       # ramp v_ref -> 0 near goal
+
+    # Optional: explicitly control other states (ONLY if you set these)
     zero_indices: Iterable[int] | None = None
     fade_indices: Iterable[int] | None = None
 
-    # heading from tangent: use a lookahead point to get more stable tangents
+    # heading from tangent: use a lookahead point for a more stable tangent
     heading_lookahead: int = 3
 
-    _path_idx: int = 0                        # internal monotonic memory
+    _path_idx: int = 0
 
     def reset(self, path_idx: int = 0) -> None:
         self._path_idx = int(max(0, path_idx))
@@ -52,11 +67,6 @@ class PathReferenceBuilder:
         """
         Returns:
             Xref: (N+1, nx) reference sequence.
-
-        Convention:
-          - Indices we don't reference are set to NaN (so they are "free").
-            This is the cleanest way to ensure you don't accidentally
-            penalize other states if your objective is written to ignore NaNs.
         """
         global_path = np.asarray(global_path, dtype=float)
         if global_path.ndim != 2 or global_path.shape[1] != 2:
@@ -74,6 +84,9 @@ class PathReferenceBuilder:
 
         if self.phi_idx is not None and not (0 <= self.phi_idx < nx):
             raise ValueError(f"phi_idx {self.phi_idx} out of bounds for nx={nx}")
+
+        if self.v_idx is not None and not (0 <= self.v_idx < nx):
+            raise ValueError(f"v_idx {self.v_idx} out of bounds for nx={nx}")
 
         # Clamp internal index
         self._path_idx = int(np.clip(self._path_idx, 0, M - 1))
@@ -101,7 +114,7 @@ class PathReferenceBuilder:
         else:
             i_max = min(M - 1, self._path_idx + int(self.max_lookahead_points))
 
-        # --- compute stop scaling (only used if fade_indices is provided) ---
+        # --- stop scaling (used for v_ref, and optional fade_indices) ---
         if goal_xy is None:
             gx, gy = float(global_path[-1, 0]), float(global_path[-1, 1])
         else:
@@ -120,8 +133,8 @@ class PathReferenceBuilder:
                 scale = float(np.clip(scale, 0.0, 1.0))
 
         # --- build Xref ---
-        # IMPORTANT: set "unreferenced" states to NaN (free)
-        Xref = np.full((N + 1, nx), np.nan, dtype=float)
+        # Default "free": keep everything equal to current x
+        Xref = np.tile(x.reshape(1, -1), (N + 1, 1))
 
         # Fill positions from the path
         for k in range(N + 1):
@@ -129,7 +142,7 @@ class PathReferenceBuilder:
             Xref[k, px_i] = global_path[idx, 0]
             Xref[k, py_i] = global_path[idx, 1]
 
-        # Set heading from path tangent if requested
+        # Heading reference from path tangent
         if self.phi_idx is not None:
             lk = max(1, int(self.heading_lookahead))
             for k in range(N + 1):
@@ -140,13 +153,19 @@ class PathReferenceBuilder:
                 dy = global_path[idx1, 1] - global_path[idx0, 1]
 
                 if abs(dx) < 1e-12 and abs(dy) < 1e-12:
-                    # fallback: keep previous ref or current phi
-                    if k > 0 and np.isfinite(Xref[k - 1, self.phi_idx]):
+                    if k > 0:
                         Xref[k, self.phi_idx] = Xref[k - 1, self.phi_idx]
                     else:
                         Xref[k, self.phi_idx] = float(x[self.phi_idx])
                 else:
                     Xref[k, self.phi_idx] = float(np.arctan2(dy, dx))
+
+        # Speed reference (ONLY if v is a STATE in this system)
+        if self.v_idx is not None:
+            vref = float(self.v_ref)
+            if self.stop_v:
+                vref *= scale
+            Xref[:, self.v_idx] = vref
 
         # Optional: force some indices to 0 (ONLY if explicitly requested)
         if self.zero_indices is not None:
@@ -158,11 +177,7 @@ class PathReferenceBuilder:
         if self.fade_indices is not None and scale < 1.0:
             fi = list(self.fade_indices)
             if fi:
-                # Only fade finite values; leave NaNs untouched
-                vals = Xref[:, fi]
-                mask = np.isfinite(vals)
-                vals[mask] *= scale
-                Xref[:, fi] = vals
+                Xref[:, fi] *= scale
 
         return Xref
 
@@ -171,6 +186,9 @@ def make_reference_builder(
     *,
     pos_idx: tuple[int, int] = (0, 1),
     phi_idx: int | None = None,
+    v_idx: int | None = None,
+    v_ref: float = 0.0,
+    stop_v: bool = True,
     window: int = 40,
     max_lookahead_points: int | None = None,
     stop_radius: float = 0.25,
@@ -182,6 +200,9 @@ def make_reference_builder(
     return PathReferenceBuilder(
         pos_idx=pos_idx,
         phi_idx=phi_idx,
+        v_idx=v_idx,
+        v_ref=v_ref,
+        stop_v=stop_v,
         window=window,
         max_lookahead_points=max_lookahead_points,
         stop_radius=stop_radius,
