@@ -108,7 +108,7 @@ def main():
     nu = system.input_dim
     nc = constraints.constraints_dim
     x = x_init.copy()
-    Xref_seq = np.tile(x_goal.reshape(1, -1), (N + 1, 1))
+    Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
     ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
@@ -135,7 +135,7 @@ def main():
 
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
-        
+
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
