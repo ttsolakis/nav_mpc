@@ -225,12 +225,12 @@ def animate_unicycle(
     GIF_DPI = 80
 
     N_GHOSTS = 5
-    GHOST_ALPHA_MIN = 0.10
+    GHOST_ALPHA_MIN = 0.2
     PLAN_LINE_WIDTH = 2.0
     LIDAR_POINT_SIZE = 6
 
     GP_LINE_WIDTH = 1.5
-    GP_MARKER_SIZE = 16
+    GP_MARKER_SIZE = 2
 
     # ---- Trajectory arrays ----
     x_arr = np.vstack(x_traj) if isinstance(x_traj, list) else np.asarray(x_traj, dtype=float)
@@ -346,14 +346,15 @@ def animate_unicycle(
             linewidth=GP_LINE_WIDTH,
             linestyle="--",
             color="#ff7f0e",
-            alpha=0.5,
+            alpha=0.25,
         )
         ax_xy.scatter(
             global_path[:, 0],
             global_path[:, 1],
             s=GP_MARKER_SIZE,
+            marker=".",
             color="#ff7f0e",
-            alpha=0.5,
+            alpha=0.0,
         )
 
     ax_xy.plot(px[0], py[0], marker=".", markersize=3, linestyle="None")

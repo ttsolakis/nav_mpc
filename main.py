@@ -38,9 +38,9 @@ def main():
     embedded = True
     
     # Initial & goal states
-    x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])
-    x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0])
-    velocity_ref = 0.5  # desired cruising speed [m/s]
+    x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])  # Initial system state
+    x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0])          # Terminal system state
+    velocity_ref = 0.5                                    # Desired cruising speed [m/s]
 
     # Horizon, sampling time and total simulation time
     N    = 25    # steps
@@ -135,6 +135,7 @@ def main():
 
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
+        
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
