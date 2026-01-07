@@ -40,7 +40,6 @@ def main():
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])
     x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0])
-    position_goal = x_goal[:2]
     velocity_ref = 0.5  # desired cruising speed [m/s]
 
     # Horizon, sampling time and total simulation time
@@ -74,7 +73,7 @@ def main():
 
     global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=0.15+0.1, cfg=rrt_cfg)
     global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.01, k=3)
-    ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, v_ref=velocity_ref, window=40, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50, stop_v=True)
+    ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, x_goal=x_goal, v_ref=velocity_ref, goal_indices=[4], window=40, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
 
     end_global_time = time.perf_counter()
     
@@ -136,8 +135,7 @@ def main():
 
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
-
-        Xref_seq = ref_builder(global_path=global_path, x=x, N=N, goal_xy=position_goal)
+        Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
                       
         end_eQP_time = time.perf_counter()

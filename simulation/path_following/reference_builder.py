@@ -1,5 +1,4 @@
 # nav_mpc/simulation/path_following/reference_builder.py
-# (or wherever your make_reference_builder currently lives)
 
 from __future__ import annotations
 
@@ -8,66 +7,87 @@ from dataclasses import dataclass
 from typing import Iterable
 
 
+def _wrap_to_pi(a: float) -> float:
+    return (a + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def _blend_angle(a: float, b: float, w_b: float) -> float:
+    """
+    Blend angles on the circle.
+    Returns angle corresponding to (1-w_b)*a + w_b*b in sin/cos space.
+    """
+    w_b = float(np.clip(w_b, 0.0, 1.0))
+    sa, ca = np.sin(a), np.cos(a)
+    sb, cb = np.sin(b), np.cos(b)
+    s = (1.0 - w_b) * sa + w_b * sb
+    c = (1.0 - w_b) * ca + w_b * cb
+    return float(np.arctan2(s, c))
+
+
 @dataclass
 class PathReferenceBuilder:
     """
-    Generic receding-horizon reference builder from a 2D path.
+    Receding-horizon reference builder for 2D path following.
 
-    Path-following assumes you may want references for:
-      - position: (px, py)
-      - heading:  phi  (path tangent)
-      - speed:    v    (cruise speed along the path)
+    Sets references for:
+      - px,py from global path
+      - phi from path tangent (blended to phi_goal near goal if provided)
+      - v as cruise v_ref (blended to v_goal near goal if provided)
 
-    Everything else is left "free" by default: we simply keep it equal to the
-    current state x so you don't accidentally drive it to zero.
-    (This avoids NaNs, which would break your compiled SymPy/Autowrap kernels.)
+    Everything else remains "free" by default:
+      - we keep it equal to the current state x at each call,
+        so you don't accidentally drive it to zero.
 
-    Optional:
-      - If you explicitly provide `zero_indices` and/or `fade_indices`,
-        then those indices can be forced/faded (useful for specific systems).
+    Goal behavior:
+      - x_goal defines (px_goal, py_goal, phi_goal, v_goal, ...)
+      - inside stop_radius, blend weight goes to goal
+      - within stop_ramp, blend smoothly transitions
     """
 
-    # --- indices into the system state vector x ---
-    pos_idx: tuple[int, int] = (0, 1)          # (px, py)
-    phi_idx: int | None = None                # heading index
-    v_idx: int | None = None                  # longitudinal speed index (if it's a STATE)
+    # indices in x
+    pos_idx: tuple[int, int] = (0, 1)
+    phi_idx: int | None = None
+    v_idx: int | None = None
 
-    # --- path search / horizon handling ---
-    window: int = 40
-    max_lookahead_points: int | None = None
-
-    # --- stop behavior near goal (mainly for v reference) ---
+    # goal / cruise
+    x_goal: np.ndarray | None = None     # full goal state (recommended)
+    v_ref: float = 0.0                   # cruise speed
     stop_radius: float = 0.25
     stop_ramp: float = 0.50
 
-    # --- speed reference ---
-    v_ref: float = 0.0                        # desired cruise speed [m/s]
-    stop_v: bool = True                       # ramp v_ref -> 0 near goal
+    # path handling
+    window: int = 40
+    max_lookahead_points: int | None = None
+    heading_lookahead: int = 3
 
-    # Optional: explicitly control other states (ONLY if you set these)
+    # optional: also blend additional indices to goal values near goal (e.g. yaw rate r)
+    goal_indices: Iterable[int] | None = None
+
+    # optional: force/fade (only if explicitly asked)
     zero_indices: Iterable[int] | None = None
     fade_indices: Iterable[int] | None = None
-
-    # heading from tangent: use a lookahead point for a more stable tangent
-    heading_lookahead: int = 3
 
     _path_idx: int = 0
 
     def reset(self, path_idx: int = 0) -> None:
         self._path_idx = int(max(0, path_idx))
 
-    def __call__(
-        self,
-        global_path: np.ndarray,
-        x: np.ndarray,
-        N: int,
-        *,
-        goal_xy: np.ndarray | None = None,
-    ) -> np.ndarray:
+    def _blend_scale(self, dist_goal: float) -> float:
         """
-        Returns:
-            Xref: (N+1, nx) reference sequence.
+        Returns s in [0,1]:
+          s=1 far from goal (pure cruise/path-follow)
+          s=0 at goal (pure goal-state)
         """
+        if self.stop_ramp < 1e-9:
+            return 0.0 if dist_goal <= self.stop_radius else 1.0
+
+        if dist_goal <= self.stop_radius:
+            return 0.0
+
+        s = (dist_goal - self.stop_radius) / self.stop_ramp
+        return float(np.clip(s, 0.0, 1.0))
+
+    def __call__(self, global_path: np.ndarray, x: np.ndarray, N: int) -> np.ndarray:
         global_path = np.asarray(global_path, dtype=float)
         if global_path.ndim != 2 or global_path.shape[1] != 2:
             raise ValueError(f"global_path must be (M,2), got {global_path.shape}")
@@ -81,21 +101,35 @@ class PathReferenceBuilder:
         px_i, py_i = self.pos_idx
         if not (0 <= px_i < nx and 0 <= py_i < nx):
             raise ValueError(f"pos_idx {self.pos_idx} out of bounds for nx={nx}")
-
         if self.phi_idx is not None and not (0 <= self.phi_idx < nx):
             raise ValueError(f"phi_idx {self.phi_idx} out of bounds for nx={nx}")
-
         if self.v_idx is not None and not (0 <= self.v_idx < nx):
             raise ValueError(f"v_idx {self.v_idx} out of bounds for nx={nx}")
 
-        # Clamp internal index
-        self._path_idx = int(np.clip(self._path_idx, 0, M - 1))
+        # goal state bookkeeping
+        x_goal = None
+        if self.x_goal is not None:
+            x_goal = np.asarray(self.x_goal, dtype=float).reshape(-1)
+            if x_goal.size != nx:
+                raise ValueError(f"x_goal must have size nx={nx}, got {x_goal.size}")
 
-        # --- local forward search for closest path point ---
-        i_start = self._path_idx
-        i_end = min(M, self._path_idx + int(self.window) + 1)
+        # goal position for blending scale
+        if x_goal is not None:
+            gx, gy = float(x_goal[px_i]), float(x_goal[py_i])
+        else:
+            gx, gy = float(global_path[-1, 0]), float(global_path[-1, 1])
 
         p = np.array([x[px_i], x[py_i]], dtype=float)
+        dist_goal = float(np.hypot(p[0] - gx, p[1] - gy))
+        s = self._blend_scale(dist_goal)          # 1 far, 0 near
+        w_goal = 1.0 - s                          # 0 far, 1 near
+
+        # clamp internal index
+        self._path_idx = int(np.clip(self._path_idx, 0, M - 1))
+
+        # forward search window for closest point
+        i_start = self._path_idx
+        i_end = min(M, self._path_idx + int(self.window) + 1)
         segment = global_path[i_start:i_end]
 
         if segment.shape[0] == 0:
@@ -104,80 +138,73 @@ class PathReferenceBuilder:
             d2 = np.sum((segment - p[None, :]) ** 2, axis=1)
             i0 = i_start + int(np.argmin(d2))
 
-        # monotonic progress
         i0 = max(i0, self._path_idx)
         self._path_idx = i0
 
-        # clamp how far ahead we reference along the path
         if self.max_lookahead_points is None:
             i_max = M - 1
         else:
             i_max = min(M - 1, self._path_idx + int(self.max_lookahead_points))
 
-        # --- stop scaling (used for v_ref, and optional fade_indices) ---
-        if goal_xy is None:
-            gx, gy = float(global_path[-1, 0]), float(global_path[-1, 1])
-        else:
-            goal_xy = np.asarray(goal_xy, dtype=float).reshape(2)
-            gx, gy = float(goal_xy[0]), float(goal_xy[1])
-
-        dist_goal = float(np.hypot(p[0] - gx, p[1] - gy))
-
-        if self.stop_ramp < 1e-9:
-            scale = 0.0 if dist_goal <= self.stop_radius else 1.0
-        else:
-            if dist_goal <= self.stop_radius:
-                scale = 0.0
-            else:
-                scale = (dist_goal - self.stop_radius) / self.stop_ramp
-                scale = float(np.clip(scale, 0.0, 1.0))
-
-        # --- build Xref ---
-        # Default "free": keep everything equal to current x
+        # default free behavior: copy current x
         Xref = np.tile(x.reshape(1, -1), (N + 1, 1))
 
-        # Fill positions from the path
+        # positions from path
         for k in range(N + 1):
             idx = min(self._path_idx + k, i_max)
             Xref[k, px_i] = global_path[idx, 0]
             Xref[k, py_i] = global_path[idx, 1]
 
-        # Heading reference from path tangent
+        # heading from tangent, then blend to phi_goal near goal (if available)
         if self.phi_idx is not None:
             lk = max(1, int(self.heading_lookahead))
+            phi_path = np.empty(N + 1, dtype=float)
+
             for k in range(N + 1):
                 idx0 = min(self._path_idx + k, i_max)
                 idx1 = min(idx0 + lk, i_max)
-
                 dx = global_path[idx1, 0] - global_path[idx0, 0]
                 dy = global_path[idx1, 1] - global_path[idx0, 1]
-
                 if abs(dx) < 1e-12 and abs(dy) < 1e-12:
-                    if k > 0:
-                        Xref[k, self.phi_idx] = Xref[k - 1, self.phi_idx]
-                    else:
-                        Xref[k, self.phi_idx] = float(x[self.phi_idx])
+                    phi_path[k] = phi_path[k - 1] if k > 0 else float(x[self.phi_idx])
                 else:
-                    Xref[k, self.phi_idx] = float(np.arctan2(dy, dx))
+                    phi_path[k] = float(np.arctan2(dy, dx))
 
-        # Speed reference (ONLY if v is a STATE in this system)
+            if x_goal is not None:
+                phi_goal = float(x_goal[self.phi_idx])
+                for k in range(N + 1):
+                    Xref[k, self.phi_idx] = _blend_angle(phi_path[k], phi_goal, w_goal)
+            else:
+                Xref[:, self.phi_idx] = phi_path
+
+        # speed reference (if v is a STATE): blend v_ref -> v_goal
         if self.v_idx is not None:
-            vref = float(self.v_ref)
-            if self.stop_v:
-                vref *= scale
-            Xref[:, self.v_idx] = vref
+            v_cruise = float(self.v_ref)
+            if x_goal is not None:
+                v_goal = float(x_goal[self.v_idx])
+                v_ref = s * v_cruise + (1.0 - s) * v_goal
+            else:
+                # no goal speed provided -> optionally stop at goal by ramping to 0
+                v_ref = s * v_cruise
+            Xref[:, self.v_idx] = float(v_ref)
 
-        # Optional: force some indices to 0 (ONLY if explicitly requested)
+        # optionally blend additional indices to goal (e.g., yaw rate r -> 0)
+        if x_goal is not None and self.goal_indices is not None:
+            gi = list(self.goal_indices)
+            for j in gi:
+                if 0 <= j < nx:
+                    Xref[:, j] = s * Xref[:, j] + (1.0 - s) * float(x_goal[j])
+
+        # optional force/fade
         if self.zero_indices is not None:
             zi = list(self.zero_indices)
             if zi:
                 Xref[:, zi] = 0.0
 
-        # Optional: fade some indices near goal (ONLY if explicitly requested)
-        if self.fade_indices is not None and scale < 1.0:
+        if self.fade_indices is not None and s < 1.0:
             fi = list(self.fade_indices)
             if fi:
-                Xref[:, fi] *= scale
+                Xref[:, fi] *= s
 
         return Xref
 
@@ -187,27 +214,29 @@ def make_reference_builder(
     pos_idx: tuple[int, int] = (0, 1),
     phi_idx: int | None = None,
     v_idx: int | None = None,
+    x_goal: np.ndarray | None = None,
     v_ref: float = 0.0,
-    stop_v: bool = True,
-    window: int = 40,
-    max_lookahead_points: int | None = None,
     stop_radius: float = 0.25,
     stop_ramp: float = 0.50,
+    window: int = 40,
+    max_lookahead_points: int | None = None,
+    heading_lookahead: int = 3,
+    goal_indices: Iterable[int] | None = None,
     zero_indices: Iterable[int] | None = None,
     fade_indices: Iterable[int] | None = None,
-    heading_lookahead: int = 3,
 ) -> PathReferenceBuilder:
     return PathReferenceBuilder(
         pos_idx=pos_idx,
         phi_idx=phi_idx,
         v_idx=v_idx,
+        x_goal=x_goal,
         v_ref=v_ref,
-        stop_v=stop_v,
-        window=window,
-        max_lookahead_points=max_lookahead_points,
         stop_radius=stop_radius,
         stop_ramp=stop_ramp,
+        window=window,
+        max_lookahead_points=max_lookahead_points,
+        heading_lookahead=heading_lookahead,
+        goal_indices=goal_indices,
         zero_indices=zero_indices,
         fade_indices=fade_indices,
-        heading_lookahead=heading_lookahead,
     )
