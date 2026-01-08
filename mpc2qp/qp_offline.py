@@ -62,11 +62,13 @@ class QPStructures:
     # Collision corridor (optional)
     nc_sys: int
     nc_col: int
-    normals: np.ndarray | None          # (M,2) if enabled else None
     pos_idx: tuple[int, int] | None     # (ix,iy)
     b_loose: float
     r_safe: float
     roi: float
+    M_col: int                          # == collision.M (kept for convenience)
+    idx_Cx: np.ndarray | None           # (N, nc_col) indices into A_init.data
+    idx_Cy: np.ndarray | None           # (N, nc_col) indices into A_init.data
 
 
 def _build_discretized_linearized_dynamics(system: SystemModel, dt: float) -> Tuple[Callable, Callable, Callable]:
@@ -315,28 +317,27 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
     nc = nc_sys + nc_col
 
     # ----------------------------
-    # Collision corridor metadata
+    # Collision metadata
     # ----------------------------
-    normals = None
     pos_idx = None
     b_loose = 1e6
     r_safe = 0.0
     roi = 0.0
+    M_col = 0
 
     if nc_col > 0:
-        normals = collision.normals()          # (M,2)
-        pos_idx = collision.pos_idx            # (ix,iy)
+        pos_idx = collision.pos_idx
         b_loose = float(collision.b_loose)
-        r_safe = float(collision.r_safe) 
+        r_safe = float(collision.r_safe)
         roi = float(collision.roi)
+        M_col = int(collision.M)
 
         ix, iy = pos_idx
         if ix == iy:
             raise ValueError("collision.pos_idx must have distinct indices (x,y).")
         if not (0 <= ix < nx and 0 <= iy < nx):
             raise ValueError(f"collision.pos_idx {pos_idx} out of range for nx={nx}.")
-        if normals.shape != (nc_col, 2):
-            raise ValueError(f"collision.normals() must return shape ({nc_col},2), got {normals.shape}")
+
 
     n_z = (N + 1) * nx + N * nu
     n_eq = (N + 1) * nx
@@ -469,18 +470,23 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
         # Collision block (nc_col)
         # Apply to FUTURE states only:
         # stage k -> state x_{k+1}
-        # n_i^T [x_{k+1}, y_{k+1}] <= b_{k,i}
+        # Each collision row will later be:
+        #   A_xy[k,j,0] * x_{k+1,ix} + A_xy[k,j,1] * x_{k+1,iy} <= b[k,j]
+        # Here we only allocate sparsity with zeros.
         # ----------------------------
         if nc_col > 0:
-            assert normals is not None and pos_idx is not None
+            assert pos_idx is not None
             ix, iy = pos_idx
 
-            col_xcol = (k + 1) * nx  # <-- SHIFT: X1..XN (never X0)
+            col_xcol = (k + 1) * nx  # SHIFT: x_{k+1}
 
-            for i in range(nc_col):
-                r = ineq_row0 + nc_sys + i
-                rows.append(r); cols.append(col_xcol + ix); data.append(float(normals[i, 0]))
-                rows.append(r); cols.append(col_xcol + iy); data.append(float(normals[i, 1]))
+            for j in range(nc_col):
+                r = ineq_row0 + nc_sys + j
+
+                # placeholders (zeros), overwritten online
+                rows.append(r); cols.append(col_xcol + ix); data.append(0.0)
+                rows.append(r); cols.append(col_xcol + iy); data.append(0.0)
+
 
 
     A_init = sparse.coo_matrix((data, (rows, cols)), shape=(m, n_z)).tocsc()
@@ -518,6 +524,11 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
     idx_Bd = np.empty((N, nx, nu), dtype=np.int64)
     idx_Gx = np.empty((N, nc_sys, nx), dtype=np.int64)
     idx_Gu = np.empty((N, nc_sys, nu), dtype=np.int64)
+    idx_Cx = None
+    idx_Cy = None
+    if nc_col > 0:
+        idx_Cx = np.empty((N, nc_col), dtype=np.int64)
+        idx_Cy = np.empty((N, nc_col), dtype=np.int64)
 
     for k in range(N):
         col_xk = k * nx
@@ -543,6 +554,19 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
             for j in range(nu):
                 idx_Gu[k, i, j] = _csc_position(A_init, ineq_row0 + i, col_uk + j)
 
+    if nc_col > 0:
+        assert pos_idx is not None
+        ix, iy = pos_idx
+
+        for k in range(N):
+            ineq_row0 = n_eq + k * nc
+            col_xcol = (k + 1) * nx
+
+            for j in range(nc_col):
+                r = ineq_row0 + nc_sys + j
+                idx_Cx[k, j] = _csc_position(A_init, r, col_xcol + ix)
+                idx_Cy[k, j] = _csc_position(A_init, r, col_xcol + iy)
+
     # -----------------------------------------------------------------------------
     # Compiled kernels
     # -----------------------------------------------------------------------------
@@ -556,4 +580,4 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
         Q=Q, QN=QN, R=R,
         idx_Ad=idx_Ad, idx_Bd=idx_Bd, idx_Gx=idx_Gx, idx_Gu=idx_Gu, idx_Px=idx_Px, idx_Pu=idx_Pu,
         Ad_fun=Ad_fun, Bd_fun=Bd_fun, cd_fun=cd_fun, Gx_fun=Gx_fun, Gu_fun=Gu_fun, g_fun=g_fun, e_fun=e_fun, Ex_fun=Ex_fun,
-        nc_sys=nc_sys, nc_col=nc_col, normals=normals, pos_idx=pos_idx, b_loose=b_loose, r_safe=r_safe, roi=roi)
+        nc_sys=nc_sys, nc_col=nc_col, pos_idx=pos_idx, b_loose=b_loose, r_safe=r_safe, roi=roi, M_col=M_col, idx_Cx=idx_Cx, idx_Cy=idx_Cy)

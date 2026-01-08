@@ -5,7 +5,7 @@ from typing import Tuple
 
 import numpy as np
 from numba import njit
-from constraints.collision_constraints.halfspace_corridor import compute_collision_bounds_horizon
+from constraints.collision_constraints.halfspace_corridor import compute_collision_halfspaces_horizon
 
 # ============================================================
 # Workspace (preallocated buffers to avoid per-step allocations)
@@ -58,7 +58,6 @@ def make_workspace(
     - A_data should be qp.A_init.data (CSC data array). We keep a private copy for updates.
     - P_data should be qp.P_init.data (upper-tri CSC data array). We keep a private copy for updates.
     - l_init/u_init and q_init are copied to private arrays that we overwrite each step.
-    # nc == nc_sys (system inequalities only)!!
     """
     return QPWorkspace(
         A_data_new=A_data.copy(),
@@ -360,33 +359,45 @@ def update_qp(
         n_eq=n_eq,
     )
 
-    B_out = None
+    Axy_out = None
+    bcol_out = None
 
     if nc_col > 0:
-
         if obstacles_xy is None:
             raise ValueError("nc_col > 0 but obstacles_xy is None.")
-        
-        # centers for collision stages:
-        # stage k constrains state x_{k+1}; since Xbar[k] = X[k+1], use Xbar[:N]
-        ix, iy = qp.pos_idx
-        centers_xy = ws.Xbar[:N, [ix, iy]].copy()   # (N,2)
+        if qp.pos_idx is None:
+            raise ValueError("nc_col > 0 but qp.pos_idx is None.")
+        if qp.idx_Cx is None or qp.idx_Cy is None:
+            raise ValueError("nc_col > 0 but qp.idx_Cx/idx_Cy not built offline.")
 
-        B = compute_collision_bounds_horizon(
+        ix, iy = qp.pos_idx
+
+        # stage k constrains x_{k+1}; since Xbar[k] = X[k+1], use Xbar[:N]
+        centers_xy = ws.Xbar[:N, [ix, iy]]  # (N,2) view is fine
+
+        A_xy, b = compute_collision_halfspaces_horizon(
             obstacles_xy=obstacles_xy,
             centers_xy=centers_xy,
-            normals=qp.normals,
-            r_safe=qp.r_safe,
+            M=nc_col,          # == collision.M
+            rho=qp.r_safe,        # rho = r_robot + r_buffer
             roi=qp.roi,
             b_loose=qp.b_loose,
+            pick="closest",
         )
 
+        # Write collision A coefficients into CSC data
         for k in range(N):
-            coll_row0 = n_eq + k * nc_total + nc_sys
-            ws.u_new[coll_row0 : coll_row0 + qp.nc_col] = B[k, :]
-            # ws.u_new[coll_row0 : coll_row0 + qp.nc_col] = qp.b_loose
+            for j in range(nc_col):
+                ws.A_data_new[qp.idx_Cx[k, j]] = A_xy[k, j, 0]
+                ws.A_data_new[qp.idx_Cy[k, j]] = A_xy[k, j, 1]
 
-        B_out = B
+            # Write collision bounds into u
+            coll_row0 = n_eq + k * nc_total + nc_sys
+            ws.u_new[coll_row0 : coll_row0 + nc_col] = b[k, :]
+
+        Axy_out = A_xy
+        bcol_out = b
+
 
     # 4) Fill P,q (Python, small dense ops per stage)
     _fill_objective_inplace(
@@ -411,4 +422,4 @@ def update_qp(
     # 5) Push updates to OSQP
     prob.update(Px=ws.P_data_new, q=ws.q_new, Ax=ws.A_data_new, l=ws.l_new, u=ws.u_new)
 
-    return B_out
+    return (Axy_out, bcol_out)

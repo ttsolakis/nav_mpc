@@ -194,14 +194,28 @@ def _extract_col_bounds_list(kwargs: dict) -> list[np.ndarray | None] | None:
     return None
 
 
+def _extract_col_Axy_list(kwargs: dict) -> list[np.ndarray | None] | None:
+    for key in ("col_Axy_traj", "col_Axy_list", "collision_Axy_traj"):
+        if key in kwargs and kwargs[key] is not None:
+            lst = kwargs[key]
+            if isinstance(lst, list):
+                return lst
+    return None
+
+
 def _extract_collision_normals(kwargs: dict) -> np.ndarray | None:
+    """
+    Backwards-compatible fallback: if you pass a collision config with fixed normals.
+    """
     col = kwargs.get("collision", None)
     if col is not None and hasattr(col, "normals"):
-        N = col.normals()
+        try:
+            N = col.normals()
+        except TypeError:
+            N = col.normals
         N = np.asarray(N, dtype=float)
         if N.ndim == 2 and N.shape[1] == 2:
             return N
-    # alternatively allow passing normals directly
     if "collision_normals" in kwargs and kwargs["collision_normals"] is not None:
         N = np.asarray(kwargs["collision_normals"], dtype=float)
         if N.ndim == 2 and N.shape[1] == 2:
@@ -211,10 +225,7 @@ def _extract_collision_normals(kwargs: dict) -> np.ndarray | None:
 
 def _halfspace_intersection_polygon(normals: np.ndarray, b: np.ndarray, bbox: tuple[float, float, float, float]) -> np.ndarray:
     """
-    Compute vertices of intersection {p | n_i^T p <= b_i} clipped by bbox.
-
-    bbox = (xmin, xmax, ymin, ymax)
-    Returns vertices (K,2) in CCW order, or empty (0,2).
+    Legacy: Compute vertices of intersection {p | n_i^T p <= b_i} clipped by bbox.
     """
     xmin, xmax, ymin, ymax = map(float, bbox)
 
@@ -223,18 +234,12 @@ def _halfspace_intersection_polygon(normals: np.ndarray, b: np.ndarray, bbox: tu
     if normals.ndim != 2 or normals.shape[1] != 2 or b.size != normals.shape[0]:
         return np.empty((0, 2), dtype=float)
 
-    # Add bounding box as halfspaces:
-    #  x <= xmax  -> [1,0]^T p <= xmax
-    # -x <= -xmin -> [-1,0]^T p <= -xmin
-    #  y <= ymax  -> [0,1]^T p <= ymax
-    # -y <= -ymin -> [0,-1]^T p <= -ymin
     Nb = np.array([[1, 0], [-1, 0], [0, 1], [0, -1]], dtype=float)
     bb = np.array([xmax, -xmin, ymax, -ymin], dtype=float)
 
     Nall = np.vstack([normals, Nb])
     ball = np.concatenate([b, bb])
 
-    # Candidate vertices = intersections of all pairs of boundary lines
     M = Nall.shape[0]
     pts = []
 
@@ -248,11 +253,10 @@ def _halfspace_intersection_polygon(normals: np.ndarray, b: np.ndarray, bbox: tu
             A = np.array([ni, nj], dtype=float)
             det = A[0, 0] * A[1, 1] - A[0, 1] * A[1, 0]
             if abs(det) < 1e-10:
-                continue  # nearly parallel
+                continue
 
-            p = np.linalg.solve(A, np.array([bi, bj], dtype=float))  # intersection point
+            p = np.linalg.solve(A, np.array([bi, bj], dtype=float))
 
-            # Check feasibility against all halfspaces
             if np.all(Nall @ p <= ball + 1e-9):
                 pts.append(p)
 
@@ -261,13 +265,85 @@ def _halfspace_intersection_polygon(normals: np.ndarray, b: np.ndarray, bbox: tu
 
     P = np.vstack(pts)
 
-    # Convex hull order via angle sort around centroid (OK because intersection is convex)
     c = P.mean(axis=0)
     ang = np.arctan2(P[:, 1] - c[1], P[:, 0] - c[0])
     order = np.argsort(ang)
     P = P[order]
 
-    # Remove near-duplicates
+    keep = [0]
+    for k in range(1, P.shape[0]):
+        if np.linalg.norm(P[k] - P[keep[-1]]) > 1e-6:
+            keep.append(k)
+    P = P[keep]
+
+    if P.shape[0] < 3:
+        return np.empty((0, 2), dtype=float)
+
+    return P
+
+
+def _halfspace_intersection_polygon_Axb(A: np.ndarray, b: np.ndarray, bbox: tuple[float, float, float, float]) -> np.ndarray:
+    """
+    Compute vertices of intersection {p | A p <= b} clipped by bbox.
+
+    A: (M,2), b: (M,)
+    bbox = (xmin, xmax, ymin, ymax)
+    Returns vertices (K,2) in CCW order, or empty (0,2).
+    """
+    xmin, xmax, ymin, ymax = map(float, bbox)
+
+    A = np.asarray(A, dtype=float).reshape(-1, 2)
+    b = np.asarray(b, dtype=float).reshape(-1)
+
+    if A.shape[0] != b.size:
+        return np.empty((0, 2), dtype=float)
+
+    # Filter inactive / degenerate rows (e.g., [0,0])
+    row_norm = np.linalg.norm(A, axis=1)
+    mask = row_norm > 1e-12
+    A = A[mask]
+    b = b[mask]
+
+    if A.shape[0] == 0:
+        return np.empty((0, 2), dtype=float)
+
+    # Add bbox halfspaces
+    Ab = np.array([[1, 0], [-1, 0], [0, 1], [0, -1]], dtype=float)
+    bb = np.array([xmax, -xmin, ymax, -ymin], dtype=float)
+
+    Aall = np.vstack([A, Ab])
+    ball = np.concatenate([b, bb])
+
+    M = Aall.shape[0]
+    pts = []
+
+    for i in range(M):
+        ai = Aall[i]
+        bi = ball[i]
+        for j in range(i + 1, M):
+            aj = Aall[j]
+            bj = ball[j]
+
+            Mat = np.array([ai, aj], dtype=float)
+            det = Mat[0, 0] * Mat[1, 1] - Mat[0, 1] * Mat[1, 0]
+            if abs(det) < 1e-12:
+                continue
+
+            p = np.linalg.solve(Mat, np.array([bi, bj], dtype=float))
+
+            if np.all(Aall @ p <= ball + 1e-9):
+                pts.append(p)
+
+    if len(pts) == 0:
+        return np.empty((0, 2), dtype=float)
+
+    P = np.vstack(pts)
+
+    c = P.mean(axis=0)
+    ang = np.arctan2(P[:, 1] - c[1], P[:, 0] - c[0])
+    order = np.argsort(ang)
+    P = P[order]
+
     keep = [0]
     for k in range(1, P.shape[0]):
         if np.linalg.norm(P[k] - P[keep[-1]]) > 1e-6:
@@ -299,13 +375,16 @@ def animate_unicycle(
                   x_traj=x_traj, u_traj=u_traj, x_goal=x_goal,
                   X_pred_traj=X_pred_traj, X_ref_traj=X_ref_traj,
                   lidar_scans=scans, occ_map=occ_map, global_path=global_path,
+                  collision=collision,
+                  col_bounds_traj=col_bounds_traj,
+                  col_Axy_traj=col_Axy_traj,
                   show=False, save_gif=True)
 
-    New model supported:
+    Model:
       x = [px, py, phi, v, r]    (T,5)
       u = [alpha_l, alpha_r]     (T-1,2)
 
-    Wheel speeds are *derived from state* (v,r) as:
+    Wheel speeds derived from state (v,r):
       omega_l = (v - L*r)/R
       omega_r = (v + L*r)/R
     """
@@ -314,7 +393,11 @@ def animate_unicycle(
     scan_list = _extract_scan_list(kwargs)
     occ_img, occ_extent = _maybe_load_occ_background(kwargs)
     global_path = _extract_global_path(kwargs)
-    col_bounds_list = _extract_col_bounds_list(kwargs)
+
+    col_bounds_list = _extract_col_bounds_list(kwargs)  # list of (N,M) or None
+    col_Axy_list = _extract_col_Axy_list(kwargs)        # list of (N,M,2) or None
+
+    # Backwards-compatible fallback (fixed normals corridor)
     collision_normals = _extract_collision_normals(kwargs)
 
     TARGET_ANIM_FPS = 20.0
@@ -350,15 +433,12 @@ def animate_unicycle(
     v = x_arr[:, 3].astype(float)
     r = x_arr[:, 4].astype(float)
 
-    # Inputs (wheel angular accelerations) exist for steps 0..T-2
     alpha_l = u_arr[:, 0].astype(float)
     alpha_r = u_arr[:, 1].astype(float)
 
-    # Wheel geometry from model
     Rw = float(getattr(system, "R", 0.040))
     Lh = float(getattr(system, "L", 0.062))
 
-    # Derived wheel speeds from state (defined for 0..T-1)
     omega_l = (v - Lh * r) / Rw
     omega_r = (v + Lh * r) / Rw
 
@@ -368,7 +448,6 @@ def animate_unicycle(
         if x_goal.size >= 2:
             goal_xy = x_goal[:2].copy()
 
-    # Visualization body size
     half_side = float(getattr(system, "body_size", 0.08))
     if half_side <= 0.0:
         half_side = 0.08
@@ -467,7 +546,10 @@ def animate_unicycle(
 
     # Collision corridor polygons: one per ghost (same count, same alpha fade)
     col_polys: list[Polygon] = []
-    if (collision_normals is not None) and (col_bounds_list is not None):
+    have_corridors = (col_Axy_list is not None and col_bounds_list is not None) or (
+        collision_normals is not None and col_bounds_list is not None
+    )
+    if have_corridors:
         for a in ghost_alphas:
             poly = Polygon(
                 np.zeros((0, 2), dtype=float),
@@ -568,7 +650,6 @@ def animate_unicycle(
                 gp.set_visible(False)
             return ghost_idxs
 
-        # update ghosts
         for gp, ii in zip(ghost_polys, ghost_idxs, strict=False):
             _set_body(
                 gp,
@@ -578,7 +659,6 @@ def animate_unicycle(
             )
             gp.set_visible(True)
 
-        # hide extras (shouldn't happen, but safe)
         for gp in ghost_polys[len(ghost_idxs):]:
             gp.set_visible(False)
 
@@ -612,13 +692,18 @@ def animate_unicycle(
 
     def _set_collision_polys(step_k: int, ghost_idxs: np.ndarray) -> None:
         """
-        Updates collision corridor polytopes to correspond to the SAME stages as ghosts.
-        Each ghost at stage ii gets the polytope defined by normals @ p <= Bk[ii,:].
+        Updates collision corridor polytopes synced to the SAME stages as ghosts.
+
+        Preferred:
+          uses per-stage halfspaces A_xy[ii,:,:] p <= b[ii,:]
+
+        Fallback:
+          uses fixed normals N p <= B[ii,:]
         """
         if len(col_polys) == 0:
             return
 
-        if (collision_normals is None) or (col_bounds_list is None) or (step_k < 0) or (step_k >= len(col_bounds_list)):
+        if (col_bounds_list is None) or (step_k < 0) or (step_k >= len(col_bounds_list)):
             for cp in col_polys:
                 cp.set_visible(False)
             return
@@ -628,24 +713,56 @@ def animate_unicycle(
             for cp in col_polys:
                 cp.set_visible(False)
             return
-
         Bk = np.asarray(Bk, dtype=float)
-        if Bk.ndim != 2 or Bk.shape[1] != collision_normals.shape[0]:
-            for cp in col_polys:
-                cp.set_visible(False)
-            return
 
         if ghost_idxs.size == 0:
             for cp in col_polys:
                 cp.set_visible(False)
             return
 
-        # Use current plot limits as bbox clip (stable & always finite)
         xmin, xmax = ax_xy.get_xlim()
         ymin, ymax = ax_xy.get_ylim()
         bbox = (xmin, xmax, ymin, ymax)
 
-        # For each ghost index ii, draw corridor at stage ii
+        # Preferred: per-stage Axy constraints
+        if col_Axy_list is not None and step_k < len(col_Axy_list):
+            Axyk = col_Axy_list[step_k]
+            if Axyk is None:
+                for cp in col_polys:
+                    cp.set_visible(False)
+                return
+
+            Axyk = np.asarray(Axyk, dtype=float)
+            if Axyk.ndim != 3 or Axyk.shape[0] != Bk.shape[0] or Axyk.shape[1] != Bk.shape[1] or Axyk.shape[2] != 2:
+                for cp in col_polys:
+                    cp.set_visible(False)
+                return
+
+            for cp, ii in zip(col_polys, ghost_idxs, strict=False):
+                if ii < 0 or ii >= Bk.shape[0]:
+                    cp.set_visible(False)
+                    continue
+
+                Aii = Axyk[ii, :, :]  # (M,2)
+                bii = Bk[ii, :]       # (M,)
+                verts = _halfspace_intersection_polygon_Axb(Aii, bii, bbox=bbox)
+
+                if verts.shape[0] < 3:
+                    cp.set_visible(False)
+                else:
+                    cp.set_xy(verts)
+                    cp.set_visible(True)
+
+            for cp in col_polys[len(ghost_idxs):]:
+                cp.set_visible(False)
+            return
+
+        # Fallback: fixed normals corridor
+        if collision_normals is None or Bk.ndim != 2 or Bk.shape[1] != collision_normals.shape[0]:
+            for cp in col_polys:
+                cp.set_visible(False)
+            return
+
         for cp, ii in zip(col_polys, ghost_idxs, strict=False):
             if ii < 0 or ii >= Bk.shape[0]:
                 cp.set_visible(False)
@@ -658,7 +775,6 @@ def animate_unicycle(
                 cp.set_xy(verts)
                 cp.set_visible(True)
 
-        # Hide any leftover corridor polys (shouldn't happen, but safe)
         for cp in col_polys[len(ghost_idxs):]:
             cp.set_visible(False)
 
@@ -709,7 +825,6 @@ def animate_unicycle(
         _set_reference(step_k=k)
         _set_collision_polys(step_k=k, ghost_idxs=ghost_idxs)
 
-        # plot omega up to the current state index k
         w_l_line.set_data(t[: k + 1], omega_l[: k + 1])
         w_r_line.set_data(t[: k + 1], omega_r[: k + 1])
 

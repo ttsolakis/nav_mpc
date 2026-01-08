@@ -128,7 +128,9 @@ def main():
     X_pred_traj = []
     X_ref_traj = []
     scans = []
-    col_bounds_traj = []  # list of (N, M) arrays, one per MPC cycle
+    col_bounds_traj = []  # list of b arrays (N, M), one per MPC cycle (or None)
+    col_Axy_traj = []     # list of A_xy arrays (N, M, 2) (or None)
+
 
     # -----------------------------------
     # ------------ Main Loop ------------
@@ -142,25 +144,20 @@ def main():
         # 0) Scan environment
         scan = lidar.scan(pose)
         scans.append(scan)
+        obstacles_xy = lidar.points_world_from_scan(scan, pose)
+        # obstacles_xy = np.zeros((0, 2), dtype=float)
 
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
 
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         if qp.nc_col > 0:
-            obstacles_xy = lidar.points_world_from_scan(scan, pose)
-            # obstacles_xy = np.zeros((0, 2), dtype=float)
-            B = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
-            print(f"B step{i} stats:", np.min(B), np.max(B))
-
+            A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
+            col_bounds_traj.append(b0.copy())
+            col_Axy_traj.append(A_xy0.copy())
         else:
             update_qp(prob, x, X, U, qp, ws, Xref_seq)
 
-        if B is not None:
-            col_bounds_traj.append(B.copy())
-        else:
-            col_bounds_traj.append(None)
-                      
         end_eQP_time = time.perf_counter()
 
         # 2) Solve current QP and extract solution
@@ -189,6 +186,8 @@ def main():
         u_traj.append(u0.copy())
         X_pred_traj.append(X.copy())
         X_ref_traj.append(Xref_seq.copy()) 
+        col_bounds_traj.append(None)
+        col_Axy_traj.append(None)
         pose = np.array([x[0], x[1], x[2]], dtype=float)
 
         end_sim_time = time.perf_counter()
@@ -224,6 +223,7 @@ def main():
         global_path=global_path,
         collision=collision,
         col_bounds_traj=col_bounds_traj,
+        col_Axy_traj=col_Axy_traj,
         show=False,
         save_gif=True,
     )
