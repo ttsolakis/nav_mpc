@@ -1,0 +1,1 @@
+from .halfspace_corridor import HalfspaceCorridorCollisionConfig

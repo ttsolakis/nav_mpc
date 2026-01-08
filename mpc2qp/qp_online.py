@@ -5,7 +5,7 @@ from typing import Tuple
 
 import numpy as np
 from numba import njit
-
+from constraints.collision_constraints.halfspace_corridor import compute_collision_bounds_horizon
 
 # ============================================================
 # Workspace (preallocated buffers to avoid per-step allocations)
@@ -44,7 +44,7 @@ def make_workspace(
     N: int,
     nx: int,
     nu: int,
-    nc: int,
+    nc_sys: int,
     A_data: np.ndarray,     # qp.A_init.data
     l_init: np.ndarray,     # qp.l_init
     u_init: np.ndarray,     # qp.u_init
@@ -58,6 +58,7 @@ def make_workspace(
     - A_data should be qp.A_init.data (CSC data array). We keep a private copy for updates.
     - P_data should be qp.P_init.data (upper-tri CSC data array). We keep a private copy for updates.
     - l_init/u_init and q_init are copied to private arrays that we overwrite each step.
+    # nc == nc_sys (system inequalities only)!!
     """
     return QPWorkspace(
         A_data_new=A_data.copy(),
@@ -71,9 +72,9 @@ def make_workspace(
         Ad_all=np.empty((N, nx, nx), dtype=float),
         Bd_all=np.empty((N, nx, nu), dtype=float),
         cd_all=np.empty((N, nx), dtype=float),
-        Gx_all=np.empty((N, nc, nx), dtype=float),
-        Gu_all=np.empty((N, nc, nu), dtype=float),
-        rhs_all=np.empty((N, nc), dtype=float),
+        Gx_all=np.empty((N, nc_sys, nx), dtype=float),
+        Gu_all=np.empty((N, nc_sys, nu), dtype=float),
+        rhs_all=np.empty((N, nc_sys), dtype=float),
     )
 
 
@@ -128,18 +129,19 @@ def _fill_qp_arrays_inplace(
     u_template: np.ndarray,
     idx_Ad: np.ndarray,   # (N, nx, nx)
     idx_Bd: np.ndarray,   # (N, nx, nu)
-    idx_Gx: np.ndarray,   # (N, nc, nx)
-    idx_Gu: np.ndarray,   # (N, nc, nu)
+    idx_Gx: np.ndarray,   # (N, nc_sys, nx)
+    idx_Gu: np.ndarray,   # (N, nc_sys, nu)
     x0: np.ndarray,       # (nx,)
     cd_all: np.ndarray,   # (N, nx)
     Ad_all: np.ndarray,   # (N, nx, nx)
     Bd_all: np.ndarray,   # (N, nx, nu)
-    Gx_all: np.ndarray,   # (N, nc, nx)
-    Gu_all: np.ndarray,   # (N, nc, nu)
-    rhs_all: np.ndarray,  # (N, nc)
+    Gx_all: np.ndarray,   # (N, nc_sys, nx)
+    Gu_all: np.ndarray,   # (N, nc_sys, nu)
+    rhs_all: np.ndarray,  # (N, nc_sys)
     nx: int,
     nu: int,
-    nc: int,
+    nc_sys: int,
+    nc_col: int,
     N: int,
     n_eq: int,
 ) -> None:
@@ -175,20 +177,21 @@ def _fill_qp_arrays_inplace(
                 A_data_new[idx_Bd[k, i, j]] = -Bd_all[k, i, j]
 
         # Inequalities
+        nc = nc_sys + nc_col
         ineq_row0 = n_eq + k * nc
 
         # Gx_k
-        for i in range(nc):
+        for i in range(nc_sys):
             for j in range(nx):
                 A_data_new[idx_Gx[k, i, j]] = Gx_all[k, i, j]
 
         # Gu_k
-        for i in range(nc):
+        for i in range(nc_sys):
             for j in range(nu):
                 A_data_new[idx_Gu[k, i, j]] = Gu_all[k, i, j]
 
         # upper bound = rhs_k
-        for i in range(nc):
+        for i in range(nc_sys):
             u_new[ineq_row0 + i] = rhs_all[k, i]
 
 
@@ -287,8 +290,9 @@ def update_qp(
     U: np.ndarray,
     qp,
     ws: QPWorkspace,
-    Xref_seq: np.ndarray
-) -> None:
+    Xref_seq: np.ndarray,
+    obstacles_xy: np.ndarray | None = None,
+) -> np.ndarray | None:
     """
     Fast QP update:
       - shifts (X,U) to get (Xbar,Ubar)
@@ -301,7 +305,9 @@ def update_qp(
     N = U.shape[0]
     nx = X.shape[1]
     nu = U.shape[1]
-    nc = qp.idx_Gx.shape[1]
+    nc_sys = qp.nc_sys
+    nc_col = qp.nc_col
+    nc_total = nc_sys + nc_col
     n_eq = (N + 1) * nx
 
     # 0) Set reference sequence
@@ -320,12 +326,12 @@ def update_qp(
         ws.Bd_all[k, :, :] = qp.Bd_fun(xk, uk)
         ws.cd_all[k, :] = qp.cd_fun(xk, uk)
 
-        ws.Gx_all[k, :, :] = qp.Gx_fun(xk, uk)
-        ws.Gu_all[k, :, :] = qp.Gu_fun(xk, uk)
+        if nc_sys > 0:
+            ws.Gx_all[k, :, :] = qp.Gx_fun(xk, uk)
+            ws.Gu_all[k, :, :] = qp.Gu_fun(xk, uk)
 
-        # rhs = -( g0 - Gx*xbar - Gu*ubar )
-        g0 = qp.g_fun(xk, uk)  # (nc,)
-        ws.rhs_all[k, :] = -(g0 - ws.Gx_all[k] @ xk - ws.Gu_all[k] @ uk)
+            g0 = qp.g_fun(xk, uk)  # (nc_sys,)
+            ws.rhs_all[k, :] = -(g0 - ws.Gx_all[k] @ xk - ws.Gu_all[k] @ uk)
 
     # 3) Fill A,l,u in-place (numba)
     _fill_qp_arrays_inplace(
@@ -348,10 +354,39 @@ def update_qp(
         rhs_all=ws.rhs_all,
         nx=nx,
         nu=nu,
-        nc=nc,
+        nc_sys=nc_sys,
+        nc_col=nc_col,
         N=N,
         n_eq=n_eq,
     )
+
+    B_out = None
+
+    if nc_col > 0:
+
+        if obstacles_xy is None:
+            raise ValueError("nc_col > 0 but obstacles_xy is None.")
+        
+        # centers for collision stages:
+        # stage k constrains state x_{k+1}; since Xbar[k] = X[k+1], use Xbar[:N]
+        ix, iy = qp.pos_idx
+        centers_xy = ws.Xbar[:N, [ix, iy]].copy()   # (N,2)
+
+        B = compute_collision_bounds_horizon(
+            obstacles_xy=obstacles_xy,
+            centers_xy=centers_xy,
+            normals=qp.normals,
+            r_safe=qp.r_safe,
+            roi=qp.roi,
+            b_loose=qp.b_loose,
+        )
+
+        for k in range(N):
+            coll_row0 = n_eq + k * nc_total + nc_sys
+            ws.u_new[coll_row0 : coll_row0 + qp.nc_col] = B[k, :]
+            # ws.u_new[coll_row0 : coll_row0 + qp.nc_col] = qp.b_loose
+
+        B_out = B
 
     # 4) Fill P,q (Python, small dense ops per stage)
     _fill_objective_inplace(
@@ -375,3 +410,5 @@ def update_qp(
 
     # 5) Push updates to OSQP
     prob.update(Px=ws.P_data_new, q=ws.q_new, Ax=ws.A_data_new, l=ws.l_new, u=ws.u_new)
+
+    return B_out

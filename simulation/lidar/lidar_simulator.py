@@ -130,6 +130,70 @@ class LidarSimulator2D:
         xr = ranges * np.cos(angles)
         yr = ranges * np.sin(angles)
         return np.column_stack([xr, yr])
+    
+    def scan_points_world(self, pose_xy_yaw: np.ndarray, *, finite_only: bool = True) -> np.ndarray:
+        """
+        Returns lidar hit points in the WORLD frame as (M,2).
+
+        If finite_only=True: drops inf ranges (no hit).
+        """
+        x, y, yaw = float(pose_xy_yaw[0]), float(pose_xy_yaw[1]), float(pose_xy_yaw[2])
+        scan = self.scan(pose_xy_yaw)
+
+        ranges = np.asarray(scan.ranges, dtype=float).reshape(-1)
+        angles = self.angles  # robot-frame ray angles
+
+        if finite_only:
+            mask = np.isfinite(ranges)
+            ranges = ranges[mask]
+            angles = angles[mask]
+
+        # points in robot frame
+        xr = ranges * np.cos(angles)
+        yr = ranges * np.sin(angles)
+
+        # transform to world
+        c = np.cos(yaw)
+        s = np.sin(yaw)
+        xw = x + c * xr - s * yr
+        yw = y + s * xr + c * yr
+
+        return np.column_stack([xw, yw])
+    
+    def points_world_from_scan(
+        self,
+        scan,
+        pose_xy_yaw: np.ndarray,
+        *,
+        finite_only: bool = True,
+    ) -> np.ndarray:
+        """
+        Convert an existing LaserScanLike to WORLD-frame hit points (M,2).
+        No raycasting is performed here.
+        """
+        x, y, yaw = float(pose_xy_yaw[0]), float(pose_xy_yaw[1]), float(pose_xy_yaw[2])
+
+        ranges = np.asarray(scan.ranges, dtype=float).reshape(-1)
+        angles = self.angles  # robot-frame angles
+
+        if finite_only:
+            mask = np.isfinite(ranges)
+            ranges = ranges[mask]
+            angles = angles[mask]
+
+        # robot-frame points
+        xr = ranges * np.cos(angles)
+        yr = ranges * np.sin(angles)
+
+        # robot -> world
+        c = np.cos(yaw)
+        s = np.sin(yaw)
+        xw = x + c * xr - s * yr
+        yw = y + s * xr + c * yr
+
+        return np.column_stack([xw, yw])
+
+
 
     def _raycast(self, x0: float, y0: float, dx: float, dy: float) -> float:
         """

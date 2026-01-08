@@ -25,7 +25,8 @@ def main():
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
     from problem_setup import setup_path_tracking_unicycle
-    problem_name, system, objective, constraints, animation = setup_path_tracking_unicycle.setup_problem()
+    problem_name, system, objective, constraints, collision, animation = setup_path_tracking_unicycle.setup_problem()
+
 
     print(f"Setting up: {problem_name}")
 
@@ -91,7 +92,7 @@ def main():
     # QP matrices and vectors have a standard structure and sparsity:
     # Build everything that is constant once, and prepare the exact memory
     # addresses where the time-varying numbers will be written later.
-    qp = build_qp(system=system, objective=objective, constraints=constraints, N=N, dt=dt)
+    qp = build_qp(system=system, objective=objective, constraints=constraints, N=N, dt=dt, collision=collision)
 
     end_bQP_time = time.perf_counter()
     
@@ -106,15 +107,19 @@ def main():
     # Initialize OSQP solver
     nx = system.state_dim
     nu = system.input_dim
-    nc = constraints.constraints_dim
+    nc_sys = qp.nc_sys
     x = x_init.copy()
+    pose = np.array([x[0], x[1], x[2]], dtype=float)
     Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
-    ws = make_workspace(N=N, nx=nx, nu=nu, nc=nc, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
+    ws = make_workspace(N=N, nx=nx, nu=nu, nc_sys=nc_sys, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
     X = np.tile(x.reshape(1, -1), (N + 1, 1))
     U = np.zeros((N, nu))
-    update_qp(prob, x, X, U, qp, ws, Xref_seq)
+    if qp.nc_col > 0:
+        update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=np.zeros((0, 2)))
+    else:
+        update_qp(prob, x, X, U, qp, ws, Xref_seq)
 
     # Store data for profiling, plotting & animation
     timing_stats = init_timing_stats()
@@ -123,6 +128,7 @@ def main():
     X_pred_traj = []
     X_ref_traj = []
     scans = []
+    col_bounds_traj = []  # list of (N, M) arrays, one per MPC cycle
 
     # -----------------------------------
     # ------------ Main Loop ------------
@@ -133,11 +139,27 @@ def main():
     nsim = int(tsim/dt)
     for i in range(nsim):
 
+        # 0) Scan environment
+        scan = lidar.scan(pose)
+        scans.append(scan)
+
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
 
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
-        update_qp(prob, x, X, U, qp, ws, Xref_seq)
+        if qp.nc_col > 0:
+            obstacles_xy = lidar.points_world_from_scan(scan, pose)
+            # obstacles_xy = np.zeros((0, 2), dtype=float)
+            B = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
+            print(f"B step{i} stats:", np.min(B), np.max(B))
+
+        else:
+            update_qp(prob, x, X, U, qp, ws, Xref_seq)
+
+        if B is not None:
+            col_bounds_traj.append(B.copy())
+        else:
+            col_bounds_traj.append(None)
                       
         end_eQP_time = time.perf_counter()
 
@@ -167,8 +189,7 @@ def main():
         u_traj.append(u0.copy())
         X_pred_traj.append(X.copy())
         X_ref_traj.append(Xref_seq.copy()) 
-        scan = lidar.scan(np.array([float(x[0]), float(x[1]), float(x[2])], dtype=float))
-        scans.append(scan)
+        pose = np.array([x[0], x[1], x[2]], dtype=float)
 
         end_sim_time = time.perf_counter()
  
@@ -177,7 +198,7 @@ def main():
             update_timing_stats(printing=False, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
 
     if profiling:
-        print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=nc, system_info=system_info)
+        print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=qp.nc_sys + qp.nc_col, system_info=system_info)
 
     # ----------------------------------------
     # ------------ Plot & Animate ------------
@@ -187,7 +208,25 @@ def main():
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_goal, show=False)
 
     print("Animating and saving...")
-    animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_goal, X_pred_traj=X_pred_traj, X_ref_traj=X_ref_traj, lidar_scans=scans, occ_map=occ_map, global_path=global_path, show=False, save_gif=True)
+    # animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_goal, X_pred_traj=X_pred_traj, X_ref_traj=X_ref_traj, lidar_scans=scans, occ_map=occ_map, global_path=global_path, show=False, save_gif=True)
+
+    animation(
+        system=system,
+        constraints=constraints,
+        dt=dt,
+        x_traj=x_traj,
+        u_traj=u_traj,
+        x_goal=x_goal,
+        X_pred_traj=X_pred_traj,
+        X_ref_traj=X_ref_traj,
+        lidar_scans=scans,
+        occ_map=occ_map,
+        global_path=global_path,
+        collision=collision,
+        col_bounds_traj=col_bounds_traj,
+        show=False,
+        save_gif=True,
+    )
 
 
 if __name__ == "__main__":

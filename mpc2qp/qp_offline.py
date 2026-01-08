@@ -13,7 +13,7 @@ from sympy.utilities.autowrap import autowrap
 from models.dynamics import SystemModel
 from objectives.objectives import Objective
 from constraints.sys_constraints import SystemConstraints
-
+from constraints.collision_constraints.halfspace_corridor import HalfspaceCorridorCollisionConfig
 
 @dataclass(frozen=True, slots=True)
 class QPStructures:
@@ -39,8 +39,8 @@ class QPStructures:
     # Index maps into A.data for fast filling
     idx_Ad: np.ndarray   # (N, nx, nx)
     idx_Bd: np.ndarray   # (N, nx, nu)
-    idx_Gx: np.ndarray   # (N, nc, nx)
-    idx_Gu: np.ndarray   # (N, nc, nu)
+    idx_Gx: np.ndarray   # (N, nc_sys, nx)
+    idx_Gu: np.ndarray   # (N, nc_sys, nu)
 
     # Index maps into P.data for fast filling (upper-triangular only)
     idx_Px: np.ndarray   # (N+1, nx, nx) valid only for j>=i
@@ -55,8 +55,18 @@ class QPStructures:
     g_fun:  Callable[[np.ndarray, np.ndarray], np.ndarray] 
 
     # Compiled objective-error kernels
-    e_fun: Callable[[np.ndarray], np.ndarray]
-    Ex_fun: Callable[[np.ndarray], np.ndarray]
+    e_fun: Callable[[np.ndarray, np.ndarray], np.ndarray]
+    Ex_fun: Callable[[np.ndarray, np.ndarray], np.ndarray]
+
+
+    # Collision corridor (optional)
+    nc_sys: int
+    nc_col: int
+    normals: np.ndarray | None          # (M,2) if enabled else None
+    pos_idx: tuple[int, int] | None     # (ix,iy)
+    b_loose: float
+    r_safe: float
+    roi: float
 
 
 def _build_discretized_linearized_dynamics(system: SystemModel, dt: float) -> Tuple[Callable, Callable, Callable]:
@@ -229,7 +239,7 @@ def _csc_position(A_csc: sparse.csc_matrix, row: int, col: int) -> int:
     raise KeyError(f"Entry ({row},{col}) not found in CSC pattern.")
 
 
-def build_qp(system: SystemModel, objective: Objective, constraints: SystemConstraints, N: int, dt: float) -> QPStructures:
+def build_qp(system: SystemModel, objective: Objective, constraints: SystemConstraints, N: int, dt: float, collision: HalfspaceCorridorCollisionConfig | None = None) -> QPStructures:
     """
     Offline "factory" that builds OSQP matrices with constant sparsity + index maps
     so that online you can overwrite only time-varying entries in-place.
@@ -300,7 +310,33 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
     """
     nx = system.state_dim
     nu = system.input_dim
-    nc = constraints.constraints_dim
+    nc_sys = constraints.constraints_dim
+    nc_col = int(collision.M) if (collision is not None) else 0
+    nc = nc_sys + nc_col
+
+    # ----------------------------
+    # Collision corridor metadata
+    # ----------------------------
+    normals = None
+    pos_idx = None
+    b_loose = 1e6
+    r_safe = 0.0
+    roi = 0.0
+
+    if nc_col > 0:
+        normals = collision.normals()          # (M,2)
+        pos_idx = collision.pos_idx            # (ix,iy)
+        b_loose = float(collision.b_loose)
+        r_safe = float(collision.r_safe) 
+        roi = float(collision.roi)
+
+        ix, iy = pos_idx
+        if ix == iy:
+            raise ValueError("collision.pos_idx must have distinct indices (x,y).")
+        if not (0 <= ix < nx and 0 <= iy < nx):
+            raise ValueError(f"collision.pos_idx {pos_idx} out of range for nx={nx}.")
+        if normals.shape != (nc_col, 2):
+            raise ValueError(f"collision.normals() must return shape ({nc_col},2), got {normals.shape}")
 
     n_z = (N + 1) * nx + N * nu
     n_eq = (N + 1) * nx
@@ -408,25 +444,44 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
                 cols.append(col_uk + j)
                 data.append(0.0)
 
-    # Inequality constraints placeholders per stage: Gx_k x_k + Gu_k u_k <= rhs_k
+    # Inequality constraints per stage: [system | collision]
     for k in range(N):
         ineq_row0 = n_eq + k * nc
         col_xk = k * nx
         col_uk = u_offset + k * nu
 
-        # Gx_k (nc x nx)
-        for i in range(nc):
+        # ----------------------------
+        # System block (nc_sys)
+        # ----------------------------
+        for i in range(nc_sys):
             for j in range(nx):
                 rows.append(ineq_row0 + i)
                 cols.append(col_xk + j)
                 data.append(0.0)
 
-        # Gu_k (nc x nu)
-        for i in range(nc):
+        for i in range(nc_sys):
             for j in range(nu):
                 rows.append(ineq_row0 + i)
                 cols.append(col_uk + j)
                 data.append(0.0)
+
+        # ----------------------------
+        # Collision block (nc_col)
+        # Apply to FUTURE states only:
+        # stage k -> state x_{k+1}
+        # n_i^T [x_{k+1}, y_{k+1}] <= b_{k,i}
+        # ----------------------------
+        if nc_col > 0:
+            assert normals is not None and pos_idx is not None
+            ix, iy = pos_idx
+
+            col_xcol = (k + 1) * nx  # <-- SHIFT: X1..XN (never X0)
+
+            for i in range(nc_col):
+                r = ineq_row0 + nc_sys + i
+                rows.append(r); cols.append(col_xcol + ix); data.append(float(normals[i, 0]))
+                rows.append(r); cols.append(col_xcol + iy); data.append(float(normals[i, 1]))
+
 
     A_init = sparse.coo_matrix((data, (rows, cols)), shape=(m, n_z)).tocsc()
 
@@ -442,7 +497,13 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
 
     # inequality bounds: -inf <= (...) <= rhs, with rhs overwritten online
     l_template[n_eq:] = -np.inf
-    u_template[n_eq:] = 0.0  # placeholder
+    u_template[n_eq:] = 0.0  # placeholder for system inequalities
+
+    if nc_col > 0:
+        # set collision rows to inactive by default
+        for k in range(N):
+            row0 = n_eq + k * nc + nc_sys
+            u_template[row0 : row0 + nc_col] = b_loose
 
     l_init = l_template.copy()
     u_init = u_template.copy()
@@ -455,8 +516,8 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
     # -----------------------------------------------------------------------------
     idx_Ad = np.empty((N, nx, nx), dtype=np.int64)
     idx_Bd = np.empty((N, nx, nu), dtype=np.int64)
-    idx_Gx = np.empty((N, nc, nx), dtype=np.int64)
-    idx_Gu = np.empty((N, nc, nu), dtype=np.int64)
+    idx_Gx = np.empty((N, nc_sys, nx), dtype=np.int64)
+    idx_Gu = np.empty((N, nc_sys, nu), dtype=np.int64)
 
     for k in range(N):
         col_xk = k * nx
@@ -474,11 +535,11 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
 
         # inequality blocks
         ineq_row0 = n_eq + k * nc
-        for i in range(nc):
+        for i in range(nc_sys):
             for j in range(nx):
                 idx_Gx[k, i, j] = _csc_position(A_init, ineq_row0 + i, col_xk + j)
 
-        for i in range(nc):
+        for i in range(nc_sys):
             for j in range(nu):
                 idx_Gu[k, i, j] = _csc_position(A_init, ineq_row0 + i, col_uk + j)
 
@@ -494,4 +555,5 @@ def build_qp(system: SystemModel, objective: Objective, constraints: SystemConst
         P_template=P_template, q_template=q_template, A_template=A_template, l_template=l_template, u_template=u_template,
         Q=Q, QN=QN, R=R,
         idx_Ad=idx_Ad, idx_Bd=idx_Bd, idx_Gx=idx_Gx, idx_Gu=idx_Gu, idx_Px=idx_Px, idx_Pu=idx_Pu,
-        Ad_fun=Ad_fun, Bd_fun=Bd_fun, cd_fun=cd_fun, Gx_fun=Gx_fun, Gu_fun=Gu_fun, g_fun=g_fun, e_fun=e_fun, Ex_fun=Ex_fun)
+        Ad_fun=Ad_fun, Bd_fun=Bd_fun, cd_fun=cd_fun, Gx_fun=Gx_fun, Gu_fun=Gu_fun, g_fun=g_fun, e_fun=e_fun, Ex_fun=Ex_fun,
+        nc_sys=nc_sys, nc_col=nc_col, normals=normals, pos_idx=pos_idx, b_loose=b_loose, r_safe=r_safe, roi=roi)
