@@ -378,8 +378,8 @@ def update_qp(
         A_xy, b = compute_collision_halfspaces_horizon(
             obstacles_xy=obstacles_xy,
             centers_xy=centers_xy,
-            M=nc_col,          # == collision.M
-            rho=qp.r_safe,        # rho = r_robot + r_buffer
+            M=nc_col,     
+            rho=qp.r_safe,
             roi=qp.roi,
             b_loose=qp.b_loose,
             pick="closest",
