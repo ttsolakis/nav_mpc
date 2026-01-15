@@ -155,8 +155,11 @@ def main():
             A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
             col_bounds_traj.append(b0.copy())
             col_Axy_traj.append(A_xy0.copy())
+            
         else:
             update_qp(prob, x, X, U, qp, ws, Xref_seq)
+            col_bounds_traj.append(None)
+            col_Axy_traj.append(None)
 
         end_eQP_time = time.perf_counter()
 
@@ -186,8 +189,7 @@ def main():
         u_traj.append(u0.copy())
         X_pred_traj.append(X.copy())
         X_ref_traj.append(Xref_seq.copy()) 
-        col_bounds_traj.append(None)
-        col_Axy_traj.append(None)
+        
         pose = np.array([x[0], x[1], x[2]], dtype=float)
 
         end_sim_time = time.perf_counter()

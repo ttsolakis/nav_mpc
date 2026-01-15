@@ -16,7 +16,7 @@ class HalfspaceCorridorCollisionConfig:
     where n_{k,j} is computed from the fixed reference center c_k (= Xbar[k] position),
     NOT from the decision variable p_k.
     """
-    M: int = 16
+    M: int = 500
     pos_idx: tuple[int, int] = (0, 1)     # indices of (x,y) in state
     r_robot: float = 0.10
     r_buffer: float = 0.05

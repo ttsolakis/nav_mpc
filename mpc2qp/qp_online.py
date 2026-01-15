@@ -291,7 +291,8 @@ def update_qp(
     ws: QPWorkspace,
     Xref_seq: np.ndarray,
     obstacles_xy: np.ndarray | None = None,
-) -> np.ndarray | None:
+) -> tuple[np.ndarray, np.ndarray] | None:
+    
     """
     Fast QP update:
       - shifts (X,U) to get (Xbar,Ubar)
