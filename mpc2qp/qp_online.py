@@ -5,7 +5,8 @@ from typing import Tuple
 
 import numpy as np
 from numba import njit
-from constraints.collision_constraints.halfspace_corridor import compute_collision_halfspaces_horizon
+from constraints.collision_constraints.halfspace_corridor import compute_collision_halfspaces_horizon_inplace
+
 
 # ============================================================
 # Workspace (preallocated buffers to avoid per-step allocations)
@@ -39,12 +40,18 @@ class QPWorkspace:
     Gu_all: np.ndarray
     rhs_all: np.ndarray
 
+    # Collision buffers (optional, allocated only if nc_col > 0)
+    Acol_xy: np.ndarray | None   # (N, nc_col, 2)
+    bcol: np.ndarray | None      # (N, nc_col)
+
+
 
 def make_workspace(
     N: int,
     nx: int,
     nu: int,
     nc_sys: int,
+    nc_col: int,
     A_data: np.ndarray,     # qp.A_init.data
     l_init: np.ndarray,     # qp.l_init
     u_init: np.ndarray,     # qp.u_init
@@ -59,6 +66,13 @@ def make_workspace(
     - P_data should be qp.P_init.data (upper-tri CSC data array). We keep a private copy for updates.
     - l_init/u_init and q_init are copied to private arrays that we overwrite each step.
     """
+    
+    Acol_xy = None
+    bcol = None
+    if nc_col > 0:
+        Acol_xy = np.zeros((N, nc_col, 2), dtype=float)
+        bcol = np.full((N, nc_col), 0.0, dtype=float)
+
     return QPWorkspace(
         A_data_new=A_data.copy(),
         l_new=l_init.copy(),
@@ -74,6 +88,8 @@ def make_workspace(
         Gx_all=np.empty((N, nc_sys, nx), dtype=float),
         Gu_all=np.empty((N, nc_sys, nu), dtype=float),
         rhs_all=np.empty((N, nc_sys), dtype=float),
+        Acol_xy=Acol_xy,
+        bcol=bcol,
     )
 
 
@@ -192,6 +208,16 @@ def _fill_qp_arrays_inplace(
         # upper bound = rhs_k
         for i in range(nc_sys):
             u_new[ineq_row0 + i] = rhs_all[k, i]
+
+@njit(cache=True)
+def _write_collision_csc_inplace(A_data_new, u_new, idx_Cxy, idx_Ucol, A_xy, b):
+    N = A_xy.shape[0]
+    M = A_xy.shape[1]
+    for k in range(N):
+        for j in range(M):
+            A_data_new[idx_Cxy[k, j, 0]] = A_xy[k, j, 0]
+            A_data_new[idx_Cxy[k, j, 1]] = A_xy[k, j, 1]
+            u_new[idx_Ucol[k, j]] = b[k, j]
 
 
 # ==========================
@@ -360,6 +386,9 @@ def update_qp(
         n_eq=n_eq,
     )
 
+    # -------------------------------------------------
+    # Collision constraints (halfspaces) in-place update
+    # -------------------------------------------------
     Axy_out = None
     bcol_out = None
 
@@ -368,33 +397,42 @@ def update_qp(
             raise ValueError("nc_col > 0 but obstacles_xy is None.")
         if qp.pos_idx is None:
             raise ValueError("nc_col > 0 but qp.pos_idx is None.")
-        if qp.idx_Cx is None or qp.idx_Cy is None:
-            raise ValueError("nc_col > 0 but qp.idx_Cx/idx_Cy not built offline.")
+        if qp.idx_Cxy is None:
+            raise ValueError("nc_col > 0 but qp.idx_Cxy not built offline.")
+        if qp.idx_Ucol is None:
+            raise ValueError("nc_col > 0 but qp.idx_Ucol not built offline.")
+        if ws.Acol_xy is None or ws.bcol is None:
+            raise ValueError("Workspace collision buffers not allocated but nc_col > 0.")
 
         ix, iy = qp.pos_idx
 
         # stage k constrains x_{k+1}; since Xbar[k] = X[k+1], use Xbar[:N]
-        centers_xy = ws.Xbar[:N, [ix, iy]]  # (N,2) view is fine
+        centers_xy = ws.Xbar[:N, [ix, iy]]  # (N,2)
 
-        A_xy, b = compute_collision_halfspaces_horizon(
+        A_xy = ws.Acol_xy
+        b = ws.bcol
+
+        compute_collision_halfspaces_horizon_inplace(
             obstacles_xy=obstacles_xy,
             centers_xy=centers_xy,
-            M=nc_col,     
+            A_xy_out=A_xy,
+            b_out=b,
+            M=nc_col,
             rho=qp.r_safe,
             roi=qp.roi,
             b_loose=qp.b_loose,
+            eps_norm=qp.eps_norm,
             pick="closest",
         )
 
-        # Write collision A coefficients into CSC data
-        for k in range(N):
-            for j in range(nc_col):
-                ws.A_data_new[qp.idx_Cx[k, j]] = A_xy[k, j, 0]
-                ws.A_data_new[qp.idx_Cy[k, j]] = A_xy[k, j, 1]
-
-            # Write collision bounds into u
-            coll_row0 = n_eq + k * nc_total + nc_sys
-            ws.u_new[coll_row0 : coll_row0 + nc_col] = b[k, :]
+        _write_collision_csc_inplace(
+            ws.A_data_new,
+            ws.u_new,
+            qp.idx_Cxy,
+            qp.idx_Ucol,
+            A_xy,
+            b,
+        )
 
         Axy_out = A_xy
         bcol_out = b

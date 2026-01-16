@@ -36,7 +36,8 @@ def main():
     system_info = True
 
     # Embedded setting (time-limited solver)
-    embedded = True
+    embedded = False
+    log_collision = False
     
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])  # Initial system state
@@ -113,11 +114,15 @@ def main():
     Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
-    ws = make_workspace(N=N, nx=nx, nu=nu, nc_sys=nc_sys, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
+    ws = make_workspace(
+        N=N, nx=nx, nu=nu, nc_sys=nc_sys, nc_col=qp.nc_col,
+        A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init,
+        P_data=qp.P_init.data, q_init=qp.q_init
+    )
     X = np.tile(x.reshape(1, -1), (N + 1, 1))
     U = np.zeros((N, nu))
     if qp.nc_col > 0:
-        update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=np.zeros((0, 2)))
+        update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=np.zeros((0, 2), dtype=float))
     else:
         update_qp(prob, x, X, U, qp, ws, Xref_seq)
 
@@ -128,8 +133,8 @@ def main():
     X_pred_traj = []
     X_ref_traj = []
     scans = []
-    col_bounds_traj = []  # list of b arrays (N, M), one per MPC cycle (or None)
-    col_Axy_traj = []     # list of A_xy arrays (N, M, 2) (or None)
+    col_bounds_traj = [] if log_collision else None
+    col_Axy_traj = [] if log_collision else None
 
 
     # -----------------------------------
@@ -144,8 +149,9 @@ def main():
         # 0) Scan environment
         scan = lidar.scan(pose)
         scans.append(scan)
-        obstacles_xy = lidar.points_world_from_scan(scan, pose)
-        # obstacles_xy = np.zeros((0, 2), dtype=float)
+        # obstacles_xy = lidar.points_world_from_scan(scan, pose)
+        obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
+
 
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
@@ -153,13 +159,14 @@ def main():
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         if qp.nc_col > 0:
             A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
-            col_bounds_traj.append(b0.copy())
-            col_Axy_traj.append(A_xy0.copy())
-            
+            if log_collision:
+                col_bounds_traj.append(b0.copy())
+                col_Axy_traj.append(A_xy0.copy())
         else:
             update_qp(prob, x, X, U, qp, ws, Xref_seq)
-            col_bounds_traj.append(None)
-            col_Axy_traj.append(None)
+            if log_collision:
+                col_bounds_traj.append(None)
+                col_Axy_traj.append(None)
 
         end_eQP_time = time.perf_counter()
 
@@ -208,27 +215,27 @@ def main():
     print("Plotting and saving...")
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_goal, show=False)
 
-    print("Animating and saving...")
+    # print("Animating and saving...")
     # animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_goal, X_pred_traj=X_pred_traj, X_ref_traj=X_ref_traj, lidar_scans=scans, occ_map=occ_map, global_path=global_path, show=False, save_gif=True)
 
-    animation(
-        system=system,
-        constraints=constraints,
-        dt=dt,
-        x_traj=x_traj,
-        u_traj=u_traj,
-        x_goal=x_goal,
-        X_pred_traj=X_pred_traj,
-        X_ref_traj=X_ref_traj,
-        lidar_scans=scans,
-        occ_map=occ_map,
-        global_path=global_path,
-        collision=collision,
-        col_bounds_traj=col_bounds_traj,
-        col_Axy_traj=col_Axy_traj,
-        show=False,
-        save_gif=True,
-    )
+    # animation(
+    #     system=system,
+    #     constraints=constraints,
+    #     dt=dt,
+    #     x_traj=x_traj,
+    #     u_traj=u_traj,
+    #     x_goal=x_goal,
+    #     X_pred_traj=X_pred_traj,
+    #     X_ref_traj=X_ref_traj,
+    #     lidar_scans=scans,
+    #     occ_map=occ_map,
+    #     global_path=global_path,
+    #     collision=collision,
+    #     col_bounds_traj=col_bounds_traj,
+    #     col_Axy_traj=col_Axy_traj,
+    #     show=False,
+    #     save_gif=True,
+    # )
 
 
 if __name__ == "__main__":
