@@ -63,6 +63,7 @@ class QPStructures:
     Ex_fun: Callable[[np.ndarray, np.ndarray], np.ndarray]
 
     # Collision corridor (optional)
+    psi_idx: int | None
     nc_sys: int
     nc_col: int
     pos_idx: tuple[int, int] | None     # (ix,iy)
@@ -241,14 +242,16 @@ def build_qp(
     # ----------------------------
     # Collision metadata
     # ----------------------------
+    psi_idx = None
     pos_idx = None
     b_loose = 1e6
     r_safe = 0.0
     roi = 0.0
     M_col = 0
     eps_norm = 1e-9
-
+    
     if nc_col > 0:
+        psi_idx = collision.psi_idx
         pos_idx = collision.pos_idx
         b_loose = float(collision.b_loose)
         r_safe = float(collision.r_safe)
@@ -261,6 +264,10 @@ def build_qp(
             raise ValueError("collision.pos_idx must have distinct indices (x,y).")
         if not (0 <= ix < nx and 0 <= iy < nx):
             raise ValueError(f"collision.pos_idx {pos_idx} out of range for nx={nx}.")
+        
+        if not (0 <= psi_idx < nx):
+            raise ValueError(f"collision.psi_idx {psi_idx} out of range for nx={nx}.")
+
 
     n_z = (N + 1) * nx + N * nu
     n_eq = (N + 1) * nx
@@ -535,6 +542,7 @@ def build_qp(
         nc_sys=nc_sys,
         nc_col=nc_col,
         pos_idx=pos_idx,
+        psi_idx=psi_idx,
         b_loose=b_loose,
         r_safe=r_safe,
         roi=roi,

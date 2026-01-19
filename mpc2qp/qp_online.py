@@ -393,8 +393,6 @@ def update_qp(
     bcol_out = None
 
     if nc_col > 0:
-        if obstacles_xy is None:
-            raise ValueError("nc_col > 0 but obstacles_xy is None.")
         if qp.pos_idx is None:
             raise ValueError("nc_col > 0 but qp.pos_idx is None.")
         if qp.idx_Cxy is None:
@@ -404,10 +402,24 @@ def update_qp(
         if ws.Acol_xy is None or ws.bcol is None:
             raise ValueError("Workspace collision buffers not allocated but nc_col > 0.")
 
+
+        # allow empty obstacle sets (angular binning will create virtual points)
+        if obstacles_xy is None:
+            obstacles_xy = np.zeros((0, 2), dtype=float)
+
         ix, iy = qp.pos_idx
 
+        # (recommended) heading index provided by collision config/offline qp
+        if getattr(qp, "psi_idx", None) is None:
+            raise ValueError("nc_col > 0 but qp.psi_idx is None (needed for angular binning).")
+        psi_idx = qp.psi_idx
+
+        # If you want to hardcode instead, replace the 3 lines above with:
+        # psi_idx = 2
+
         # stage k constrains x_{k+1}; since Xbar[k] = X[k+1], use Xbar[:N]
-        centers_xy = ws.Xbar[:N, [ix, iy]]  # (N,2)
+        centers_xy = ws.Xbar[:N, [ix, iy]]      # (N,2)
+        headings   = ws.Xbar[:N, psi_idx]       # (N,)
 
         A_xy = ws.Acol_xy
         b = ws.bcol
@@ -415,6 +427,7 @@ def update_qp(
         compute_collision_halfspaces_horizon_inplace(
             obstacles_xy=obstacles_xy,
             centers_xy=centers_xy,
+            headings=headings,
             A_xy_out=A_xy,
             b_out=b,
             M=nc_col,
@@ -422,7 +435,7 @@ def update_qp(
             roi=qp.roi,
             b_loose=qp.b_loose,
             eps_norm=qp.eps_norm,
-            pick="closest",
+            pick="angular_bins",
         )
 
         _write_collision_csc_inplace(
@@ -436,6 +449,7 @@ def update_qp(
 
         Axy_out = A_xy
         bcol_out = b
+
 
 
     # 4) Fill P,q (Python, small dense ops per stage)

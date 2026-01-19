@@ -253,20 +253,20 @@ while getting optimal performance from OSQP (3.88 ms << 20 ms).
 
 ### Simple Rover
 
-Simple kinematic rover (unicycle) model set-point tracking with LTV-MPC:
+Simple kinematic rover (unicycle) model path tracking with LTV-MPC and 36 half-space corridor constraints per stage:
 
-<img src="examples/simple_rover/rover_animation.gif" width="400">
+<img src="examples/simple_unicycle/unicycle_animation.gif" width="400">
 
-Performance with N = 30, dt = 0.1 s on a laptop CPU:
+Performance with N = 25, dt = 0.1 s on a laptop CPU:
 
 | Stage | Mean | Min | Max |
 |-------|-------|-------|-------|
-| QP eval | 3.60 ms | 1.82 ms | 9.16 ms |
-| QP solve |0.64 ms | 0.38 ms | 1.99 ms |
-| Total MPC | **4.24 ms** | **2.20 ms** | **10.97 ms** |
+| QP eval | 3.06 ms | 2.77 ms | 5.44 ms |
+| QP solve | 0.71 ms | 0.57 ms | 3.05 ms |
+| Total MPC | **3.77 ms** | **3.36 ms** | **6.21 ms** |
 
 Notice that Max time for Total MPC can stay deterministically below dt 
-while getting optimal performance from OSQP (10.97 ms << 100 ms).
+while getting optimal performance from OSQP (6.21 ms << 100 ms).
 
 ---
 

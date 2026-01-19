@@ -36,8 +36,8 @@ def main():
     system_info = True
 
     # Embedded setting (time-limited solver)
-    embedded = False
-    log_collision = False
+    embedded = True
+    log_collision = True
     
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])  # Initial system state
@@ -149,9 +149,7 @@ def main():
         # 0) Scan environment
         scan = lidar.scan(pose)
         scans.append(scan)
-        # obstacles_xy = lidar.points_world_from_scan(scan, pose)
         obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
-
 
         # 1) Evaluate QP around new (x0, x̄, ū, r̄)
         start_eQP_time = time.perf_counter()
@@ -215,27 +213,25 @@ def main():
     print("Plotting and saving...")
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_goal, show=False)
 
-    # print("Animating and saving...")
-    # animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_goal, X_pred_traj=X_pred_traj, X_ref_traj=X_ref_traj, lidar_scans=scans, occ_map=occ_map, global_path=global_path, show=False, save_gif=True)
-
-    # animation(
-    #     system=system,
-    #     constraints=constraints,
-    #     dt=dt,
-    #     x_traj=x_traj,
-    #     u_traj=u_traj,
-    #     x_goal=x_goal,
-    #     X_pred_traj=X_pred_traj,
-    #     X_ref_traj=X_ref_traj,
-    #     lidar_scans=scans,
-    #     occ_map=occ_map,
-    #     global_path=global_path,
-    #     collision=collision,
-    #     col_bounds_traj=col_bounds_traj,
-    #     col_Axy_traj=col_Axy_traj,
-    #     show=False,
-    #     save_gif=True,
-    # )
+    print("Animating and saving...")
+    animation(
+        system=system,
+        constraints=constraints,
+        dt=dt,
+        x_traj=x_traj,
+        u_traj=u_traj,
+        x_goal=x_goal,
+        X_pred_traj=X_pred_traj,
+        X_ref_traj=X_ref_traj,
+        lidar_scans=scans,
+        occ_map=occ_map,
+        global_path=global_path,
+        collision=collision,
+        col_bounds_traj=col_bounds_traj,
+        col_Axy_traj=col_Axy_traj,
+        show=False,
+        save_gif=True,
+    )
 
 
 if __name__ == "__main__":
