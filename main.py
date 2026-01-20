@@ -5,7 +5,7 @@ import osqp
 import time
 
 # Import MPC2QP functionality and timing utilities
-from mpc2qp import build_qp, make_workspace, update_qp, extract_solution
+from mpc2qp import build_qp, make_workspace, update_qp, solve_qp
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from utils.print_solution import print_solution
 
@@ -141,7 +141,6 @@ def main():
         # 1) Evaluate QP around new (x0, x̄, ū, r̄) and new obstacle scan
         start_eQP_time = time.perf_counter()
 
-        Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
         
         end_eQP_time = time.perf_counter()
@@ -149,14 +148,7 @@ def main():
         # 2) Solve current QP and extract solution
         start_opt_time = time.perf_counter()
 
-        if embedded:
-            time_limit = dt - (end_eQP_time - start_eQP_time)
-            prob.update_settings(time_limit=max(1e-5, time_limit))
-        res = prob.solve()
-        if res.info.status not in ["solved", "solved inaccurate"]: 
-            raise ValueError(f"OSQP did not solve the problem at step {i}! Status: {res.info.status}")
-        X, U = extract_solution(res, nx, nu, N)
-        u0 = U[0]
+        X, U, u0 = solve_qp(prob, nx, nu, N, embedded, dt, start_eQP_time, end_eQP_time, i)
 
         end_opt_time = time.perf_counter()
 
@@ -164,10 +156,11 @@ def main():
         if debugging:
             print_solution(i, x, u0, X, U)
 
-        # 4) Simulate closed-loop step, lidar scanning and store trajectories
+        # 4) Simulate closed-loop step, lidar scanning, build reference, and store data for plotting/animation
         start_sim_time = time.perf_counter()
 
         x  = sim.step(x, u0)
+        Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         pose = np.array([x[0], x[1], x[2]], dtype=float)
         scan = lidar.scan(pose)
         obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)

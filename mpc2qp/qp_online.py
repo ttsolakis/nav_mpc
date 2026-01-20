@@ -479,3 +479,34 @@ def update_qp(
     prob.update(Px=ws.P_data_new, q=ws.q_new, Ax=ws.A_data_new, l=ws.l_new, u=ws.u_new)
 
     return (Axy_out, bcol_out)
+
+
+def solve_qp(
+    prob,
+    nx: int,
+    nu: int,
+    N: int,
+    embedded: bool,
+    dt: float,
+    start_eQP_time: float,
+    end_eQP_time: float,
+    step_idx: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Solve the already-updated OSQP problem and extract (X, U, u0).
+
+    If embedded=True, applies a time_limit based on dt minus the provided evaluation time.
+    """
+    if embedded:
+        time_limit = dt - (end_eQP_time - start_eQP_time)
+        prob.update_settings(time_limit=max(1e-5, time_limit))
+
+    res = prob.solve()
+
+    if res.info.status not in ("solved", "solved inaccurate"):
+        raise ValueError(f"OSQP did not solve the problem at step {step_idx}! Status: {res.info.status}")
+
+    X, U = extract_solution(res, nx, nu, N) 
+    u0 = U[0]
+
+    return X, U, u0
