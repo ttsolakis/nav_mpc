@@ -36,7 +36,6 @@ def main():
 
     # Embedded setting (time-limited solver)
     embedded = True
-    log_collision = True
     
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])  # Initial system state
@@ -124,8 +123,8 @@ def main():
     X_pred_traj = []
     X_ref_traj = []
     scans = []
-    col_bounds_traj = [] if log_collision else None
-    col_Axy_traj = [] if log_collision else None
+    col_bounds_traj = []
+    col_Axy_traj = []
 
 
     # -----------------------------------
@@ -146,16 +145,9 @@ def main():
         start_eQP_time = time.perf_counter()
 
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
-        if qp.nc_col > 0:
-            A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
-            if log_collision:
-                col_bounds_traj.append(b0.copy())
-                col_Axy_traj.append(A_xy0.copy())
-        else:
-            update_qp(prob, x, X, U, qp, ws, Xref_seq)
-            if log_collision:
-                col_bounds_traj.append(None)
-                col_Axy_traj.append(None)
+        A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
+        col_bounds_traj.append(None if b0 is None else b0.copy())
+        col_Axy_traj.append(None if A_xy0 is None else A_xy0.copy())
 
         end_eQP_time = time.perf_counter()
 
