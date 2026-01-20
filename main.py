@@ -103,18 +103,20 @@ def main():
     nu = system.input_dim
     nc_sys = qp.nc_sys
 
-    # Initial state & reference
+    # Initial state, reference and environment scan
     x = x_init.copy()
-    pose = np.array([x[0], x[1], x[2]], dtype=float)
     Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
-
+    pose = np.array([x[0], x[1], x[2]], dtype=float)
+    scan = lidar.scan(pose)
+    obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
+    
     # Initialize OSQP solver and workspace
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
     ws = make_workspace(N=N, nx=nx, nu=nu, nc_sys=nc_sys, nc_col=qp.nc_col, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
     X = np.tile(x.reshape(1, -1), (N + 1, 1))
     U = np.zeros((N, nu))
-    update_qp(prob, x, X, U, qp, ws, Xref_seq)
+    update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
 
     # Logs for profiling/plotting/animation
     timing_stats = init_timing_stats()
@@ -136,19 +138,12 @@ def main():
     nsim = int(tsim/dt)
     for i in range(nsim):
 
-        # 0) Scan environment
-        scan = lidar.scan(pose)
-        scans.append(scan)
-        obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
-
         # 1) Evaluate QP around new (x0, x̄, ū, r̄) and new obstacle scan
         start_eQP_time = time.perf_counter()
 
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
-        col_bounds_traj.append(None if b0 is None else b0.copy())
-        col_Axy_traj.append(None if A_xy0 is None else A_xy0.copy())
-
+        
         end_eQP_time = time.perf_counter()
 
         # 2) Solve current QP and extract solution
@@ -169,17 +164,23 @@ def main():
         if debugging:
             print_solution(i, x, u0, X, U)
 
-        # 4) Simulate closed-loop step and store trajectories
+        # 4) Simulate closed-loop step, lidar scanning and store trajectories
         start_sim_time = time.perf_counter()
 
         x  = sim.step(x, u0)
+        pose = np.array([x[0], x[1], x[2]], dtype=float)
+        scan = lidar.scan(pose)
+        obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
+
+        # Store data for plotting/animation
         x_traj.append(x.copy())
         u_traj.append(u0.copy())
         X_pred_traj.append(X.copy())
         X_ref_traj.append(Xref_seq.copy()) 
+        scans.append(scan)
+        col_bounds_traj.append(None if b0 is None else b0.copy())
+        col_Axy_traj.append(None if A_xy0 is None else A_xy0.copy())
         
-        pose = np.array([x[0], x[1], x[2]], dtype=float)
-
         end_sim_time = time.perf_counter()
  
         # 5) Profiling updates
