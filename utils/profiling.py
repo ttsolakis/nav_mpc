@@ -106,6 +106,7 @@ def update_timing_stats(
 
 def print_timing_summary(
     stats: dict,
+    dt: float,
     N: int,
     nx: int,
     nu: int,
@@ -130,29 +131,36 @@ def print_timing_summary(
         print(f"Problem size: N = {N}, nx = {nx}, nu = {nu}, nc = {nc}")
 
     print(
-        "QP evaluation time:  "
+        "QP update time:     "
         f"avg = {_fmt(avg_eval)} ms, "
         f"min = {_fmt(stats['min_eval'])} ms, "
         f"max = {_fmt(stats['max_eval'])} ms"
     )
     print(
-        "Optimization time:   "
+        "QP solution time:   "
         f"avg = {_fmt(avg_opt)} ms, "
         f"min = {_fmt(stats['min_opt'])} ms, "
         f"max = {_fmt(stats['max_opt'])} ms"
     )
     print(
-        "Total control time:  "
+        "Total control time: "
         f"avg = {_fmt(avg_ctrl)} ms, "
         f"min = {_fmt(stats['min_ctrl'])} ms, "
         f"max = {_fmt(stats['max_ctrl'])} ms"
     )
     print(
-        "Simulation time:     "
+        "Slack time:         "
+        f"avg = {_fmt(dt * 1e3 - avg_ctrl)} ms, "
+        f"min = {_fmt(dt * 1e3 - stats['max_ctrl'])} ms, "
+        f"max = {_fmt(dt * 1e3 - stats['min_ctrl'])} ms"
+    )
+    print(
+        "Simulation time:    "
         f"avg = {_fmt(avg_sim)} ms, "
         f"min = {_fmt(stats['min_sim'])} ms, "
         f"max = {_fmt(stats['max_sim'])} ms"
     )
+    
 
     if system_info:
         print_system_info()

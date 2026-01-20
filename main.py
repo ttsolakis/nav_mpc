@@ -1,13 +1,12 @@
 # nav_mpc/main.py
-
 import numpy as np
 import osqp
 import time
 
-# Import MPC2QP functionality and timing utilities
+# Import MPC2QP functionality, timing and logging utilities
 from mpc2qp import build_qp, make_workspace, update_qp, solve_qp
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
-from utils.print_solution import print_solution
+from utils.online_logger import OnlineLogger
 
 # Import simulation test harness components (simulation, plotting, sensing, path following)
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
@@ -29,13 +28,13 @@ def main():
 
     print(f"Setting up: {problem_name}")
 
-    # Enable debugging & profiling info
-    debugging = False
+    # Enable profiling info
     profiling = True
-    system_info = True
+    hardware_info = True
 
-    # Embedded setting (time-limited solver)
+    # Solver settings (time-limited solver & printing online)
     embedded = True
+    debugging = False
     
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])  # Initial system state
@@ -120,14 +119,8 @@ def main():
 
     # Logs for profiling/plotting/animation
     timing_stats = init_timing_stats()
-    x_traj = [x.copy()]   
-    u_traj = [] 
-    X_pred_traj = []
-    X_ref_traj = []
-    scans = []
-    col_bounds_traj = []
-    col_Axy_traj = []
-
+    logger = OnlineLogger()
+    logger.x_traj.append(x.copy())   # initial condition
 
     # -----------------------------------
     # ------------ Main Loop ------------
@@ -138,25 +131,22 @@ def main():
     nsim = int(tsim/dt)
     for i in range(nsim):
 
-        # 1) Evaluate QP around new (x0, x̄, ū, r̄) and new obstacle scan
-        start_eQP_time = time.perf_counter()
+        # 1) Update QP around new (x0, x̄, ū, r̄) and new obstacle scan
+        start_uQP_time = time.perf_counter()
 
-        A_xy0, b0 = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
+        A_xy, b_xy = update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=obstacles_xy)
         
-        end_eQP_time = time.perf_counter()
+        end_uQP_time = time.perf_counter()
 
         # 2) Solve current QP and extract solution
-        start_opt_time = time.perf_counter()
+        start_sQP_time = time.perf_counter()
 
-        X, U, u0 = solve_qp(prob, nx, nu, N, embedded, dt, start_eQP_time, end_eQP_time, i)
+        time_limit = dt - (end_uQP_time - start_uQP_time)
+        X, U, u0 = solve_qp(prob, nx, nu, N, embedded, time_limit, i, debugging=debugging, x=x)
 
-        end_opt_time = time.perf_counter()
+        end_sQP_time = time.perf_counter()
 
-        # 3) Per-step prints
-        if debugging:
-            print_solution(i, x, u0, X, U)
-
-        # 4) Simulate closed-loop step, lidar scanning, build reference, and store data for plotting/animation
+        # 3) Simulate closed-loop step, lidar scanning, build reference, and log data for plotting/animation
         start_sim_time = time.perf_counter()
 
         x  = sim.step(x, u0)
@@ -164,34 +154,26 @@ def main():
         pose = np.array([x[0], x[1], x[2]], dtype=float)
         scan = lidar.scan(pose)
         obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
+        logger.log(x=x, u0=u0, X=X, Xref_seq=Xref_seq, scan=scan, A_xy=A_xy, b=b_xy)
 
-        # Store data for plotting/animation
-        x_traj.append(x.copy())
-        u_traj.append(u0.copy())
-        X_pred_traj.append(X.copy())
-        X_ref_traj.append(Xref_seq.copy()) 
-        scans.append(scan)
-        col_bounds_traj.append(None if b0 is None else b0.copy())
-        col_Axy_traj.append(None if A_xy0 is None else A_xy0.copy())
-        
         end_sim_time = time.perf_counter()
  
-        # 5) Profiling updates
+        # 4) Profiling updates
         if profiling and i > 0:
-            update_timing_stats(printing=False, stats=timing_stats, start_eval_time=start_eQP_time, end_eval_time=end_eQP_time, start_opt_time=start_opt_time, end_opt_time=end_opt_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
+            update_timing_stats(printing=False, stats=timing_stats, start_eval_time=start_uQP_time, end_eval_time=end_uQP_time, start_opt_time=start_sQP_time, end_opt_time=end_sQP_time, start_sim_time=start_sim_time, end_sim_time=end_sim_time)
 
     if profiling:
-        print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=qp.nc_sys + qp.nc_col, system_info=system_info)
+        print_timing_summary(timing_stats, N=N, nx=nx, nu=nu, nc=qp.nc_sys + qp.nc_col, system_info=hardware_info, dt=dt)
 
     # ----------------------------------------
     # ------------ Plot & Animate ------------
     # ---------------------------------------- 
 
     print("Plotting and saving...")
-    plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_goal, show=False)
+    plot_state_input_trajectories(system, constraints, dt, logger.x_traj, logger.u_traj, x_ref=x_goal, show=False)
 
     print("Animating and saving...")
-    animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_goal, X_pred_traj=X_pred_traj, X_ref_traj=X_ref_traj, lidar_scans=scans, occ_map=occ_map, global_path=global_path, collision=collision, col_bounds_traj=col_bounds_traj, col_Axy_traj=col_Axy_traj, show=False, save_gif=True)
+    animation(system=system, constraints=constraints, dt=dt, x_traj=logger.x_traj, u_traj=logger.u_traj, x_goal=x_goal, X_pred_traj=logger.X_pred_traj, X_ref_traj=logger.X_ref_traj, lidar_scans=logger.scans, occ_map=occ_map, global_path=global_path, collision=collision, col_bounds_traj=logger.col_bounds_traj, col_Axy_traj=logger.col_Axy_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()

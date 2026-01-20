@@ -28,7 +28,7 @@ class HalfspaceCorridorCollisionConfig:
           create a virtual point on that slice centerline at distance roi.
           => always exactly M ACTIVE constraints per stage.
     """
-    M: int = 36                           # number of halfspaces per stage
+    M: int = 72                           # number of halfspaces per stage
     pos_idx: tuple[int, int] = (0, 1)     # indices of (x,y) in state
     psi_idx: int = 2                      # heading index in state (needed for angular binning)
     r_robot: float = 0.10
