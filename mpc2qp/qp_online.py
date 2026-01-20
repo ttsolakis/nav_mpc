@@ -43,6 +43,7 @@ class QPWorkspace:
     # Collision buffers (optional, allocated only if nc_col > 0)
     Acol_xy: np.ndarray | None   # (N, nc_col, 2)
     bcol: np.ndarray | None      # (N, nc_col)
+    empty_obstacles_xy: np.ndarray  # shape (0,2)
 
 
 
@@ -73,6 +74,8 @@ def make_workspace(
         Acol_xy = np.zeros((N, nc_col, 2), dtype=float)
         bcol = np.full((N, nc_col), 0.0, dtype=float)
 
+    empty_obstacles_xy = np.empty((0,2), dtype=float)
+
     return QPWorkspace(
         A_data_new=A_data.copy(),
         l_new=l_init.copy(),
@@ -90,6 +93,7 @@ def make_workspace(
         rhs_all=np.empty((N, nc_sys), dtype=float),
         Acol_xy=Acol_xy,
         bcol=bcol,
+        empty_obstacles_xy=empty_obstacles_xy,
     )
 
 
@@ -317,7 +321,7 @@ def update_qp(
     ws: QPWorkspace,
     Xref_seq: np.ndarray,
     obstacles_xy: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray] | None:
+) -> tuple[np.ndarray | None, np.ndarray | None]:
     
     """
     Fast QP update:
@@ -328,12 +332,16 @@ def update_qp(
       - fills P,q in-place
       - pushes updates to OSQP
     """
+
+    # Normalize obstacles
+    obstacles_xy = ws.empty_obstacles_xy if obstacles_xy is None else obstacles_xy
+    collisions_enabled = (qp.nc_col > 0)
+
     N = U.shape[0]
     nx = X.shape[1]
     nu = U.shape[1]
     nc_sys = qp.nc_sys
     nc_col = qp.nc_col
-    nc_total = nc_sys + nc_col
     n_eq = (N + 1) * nx
 
     # 0) Set reference sequence
@@ -392,7 +400,7 @@ def update_qp(
     Axy_out = None
     bcol_out = None
 
-    if nc_col > 0:
+    if collisions_enabled:
         if qp.pos_idx is None:
             raise ValueError("nc_col > 0 but qp.pos_idx is None.")
         if qp.idx_Cxy is None:
@@ -401,11 +409,6 @@ def update_qp(
             raise ValueError("nc_col > 0 but qp.idx_Ucol not built offline.")
         if ws.Acol_xy is None or ws.bcol is None:
             raise ValueError("Workspace collision buffers not allocated but nc_col > 0.")
-
-
-        # allow empty obstacle sets (angular binning will create virtual points)
-        if obstacles_xy is None:
-            obstacles_xy = np.zeros((0, 2), dtype=float)
 
         ix, iy = qp.pos_idx
 

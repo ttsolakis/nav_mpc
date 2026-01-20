@@ -114,17 +114,11 @@ def main():
     Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
-    ws = make_workspace(
-        N=N, nx=nx, nu=nu, nc_sys=nc_sys, nc_col=qp.nc_col,
-        A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init,
-        P_data=qp.P_init.data, q_init=qp.q_init
-    )
+    ws = make_workspace(N=N, nx=nx, nu=nu, nc_sys=nc_sys, nc_col=qp.nc_col, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
     X = np.tile(x.reshape(1, -1), (N + 1, 1))
     U = np.zeros((N, nu))
-    if qp.nc_col > 0:
-        update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=np.zeros((0, 2), dtype=float))
-    else:
-        update_qp(prob, x, X, U, qp, ws, Xref_seq)
+    update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=np.zeros((0, 2), dtype=float))
+
 
     # Store data for profiling, plotting & animation
     timing_stats = init_timing_stats()
@@ -151,7 +145,7 @@ def main():
         scans.append(scan)
         obstacles_xy = lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
 
-        # 1) Evaluate QP around new (x0, x̄, ū, r̄)
+        # 1) Evaluate QP around new (x0, x̄, ū, r̄) and new obstacle scan
         start_eQP_time = time.perf_counter()
 
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
