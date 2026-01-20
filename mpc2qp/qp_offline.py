@@ -232,6 +232,10 @@ def build_qp(
     """
     Offline "factory" that builds OSQP matrices with constant sparsity + index maps
     so that online you can overwrite only time-varying entries in-place.
+
+    QP matrices and vectors have a standard structure and sparsity:
+    Build everything that is constant once, and prepare the exact memory
+    addresses where the time-varying numbers will be written later.
     """
     nx = system.state_dim
     nu = system.input_dim

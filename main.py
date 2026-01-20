@@ -27,7 +27,6 @@ def main():
     from problem_setup import setup_path_tracking_unicycle
     problem_name, system, objective, constraints, collision, animation = setup_path_tracking_unicycle.setup_problem()
 
-
     print(f"Setting up: {problem_name}")
 
     # Enable debugging & profiling info
@@ -64,7 +63,6 @@ def main():
     # Path generator configuration
     rrt_cfg = RRTStarConfig(max_iters=6000, step_size=0.10, neighbor_radius=0.30, goal_sample_rate=0.10, collision_check_step=0.02, seed=1)
 
-
     # --------------------------------------
     # -------- Global Path Planning --------
     # --------------------------------------
@@ -81,7 +79,6 @@ def main():
     
     print(f"Global path computed and reference builder set up in {int(divmod(end_global_time - start_global_time, 60)[0]):02} minutes {int(divmod(end_global_time - start_global_time, 60)[1]):02} seconds.")
 
-
     # ------------------------------------
     # ---------- QP Formulation ----------
     # ------------------------------------
@@ -90,9 +87,6 @@ def main():
 
     start_bQP_time = time.perf_counter()
 
-    # QP matrices and vectors have a standard structure and sparsity:
-    # Build everything that is constant once, and prepare the exact memory
-    # addresses where the time-varying numbers will be written later.
     qp = build_qp(system=system, objective=objective, constraints=constraints, N=N, dt=dt, collision=collision)
 
     end_bQP_time = time.perf_counter()
@@ -105,22 +99,25 @@ def main():
 
     print("Initializations...")
 
-    # Initialize OSQP solver
+    # Problem dimensions
     nx = system.state_dim
     nu = system.input_dim
     nc_sys = qp.nc_sys
+
+    # Initial state & reference
     x = x_init.copy()
     pose = np.array([x[0], x[1], x[2]], dtype=float)
     Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
+
+    # Initialize OSQP solver and workspace
     prob = osqp.OSQP()
     prob.setup(qp.P_init, qp.q_init, qp.A_init, qp.l_init, qp.u_init, warm_starting=True, verbose=False)
     ws = make_workspace(N=N, nx=nx, nu=nu, nc_sys=nc_sys, nc_col=qp.nc_col, A_data=qp.A_init.data, l_init=qp.l_init, u_init=qp.u_init, P_data=qp.P_init.data, q_init=qp.q_init)
     X = np.tile(x.reshape(1, -1), (N + 1, 1))
     U = np.zeros((N, nu))
-    update_qp(prob, x, X, U, qp, ws, Xref_seq, obstacles_xy=np.zeros((0, 2), dtype=float))
+    update_qp(prob, x, X, U, qp, ws, Xref_seq)
 
-
-    # Store data for profiling, plotting & animation
+    # Logs for profiling/plotting/animation
     timing_stats = init_timing_stats()
     x_traj = [x.copy()]   
     u_traj = [] 
@@ -208,25 +205,7 @@ def main():
     plot_state_input_trajectories(system, constraints, dt, x_traj, u_traj, x_ref=x_goal, show=False)
 
     print("Animating and saving...")
-    animation(
-        system=system,
-        constraints=constraints,
-        dt=dt,
-        x_traj=x_traj,
-        u_traj=u_traj,
-        x_goal=x_goal,
-        X_pred_traj=X_pred_traj,
-        X_ref_traj=X_ref_traj,
-        lidar_scans=scans,
-        occ_map=occ_map,
-        global_path=global_path,
-        collision=collision,
-        col_bounds_traj=col_bounds_traj,
-        col_Axy_traj=col_Axy_traj,
-        show=False,
-        save_gif=True,
-    )
-
+    animation(system=system, constraints=constraints, dt=dt, x_traj=x_traj, u_traj=u_traj, x_goal=x_goal, X_pred_traj=X_pred_traj, X_ref_traj=X_ref_traj, lidar_scans=scans, occ_map=occ_map, global_path=global_path, collision=collision, col_bounds_traj=col_bounds_traj, col_Axy_traj=col_Axy_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()
