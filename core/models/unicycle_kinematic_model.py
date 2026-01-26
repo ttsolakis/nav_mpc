@@ -1,7 +1,7 @@
 # nav_mpc/models/unicycle_kinematic_model.py
 
 import sympy as sp
-from models.dynamics import SystemModel
+from core.models.dynamics import SystemModel
 
 
 class UnicycleKinematicModel(SystemModel):

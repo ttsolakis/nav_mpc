@@ -1,7 +1,7 @@
 # nav_mpc/models/double_pendulum_model.py
 
 import sympy as sp
-from models.dynamics import SystemModel
+from core.models.dynamics import SystemModel
 
 
 class DoublePendulumModel(SystemModel):

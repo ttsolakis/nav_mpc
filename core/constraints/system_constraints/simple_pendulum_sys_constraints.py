@@ -1,8 +1,8 @@
 import numpy as np
 import sympy as sp
 
-from constraints.sys_constraints import SystemConstraints
-from models.dynamics import SystemModel
+from core.constraints.sys_constraints import SystemConstraints
+from core.models.dynamics import SystemModel
 
 
 class SimplePendulumSystemConstraints(SystemConstraints):

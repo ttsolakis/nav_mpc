@@ -10,7 +10,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
 
-from models.double_pendulum_model import DoublePendulumModel
+from core.models.double_pendulum_model import DoublePendulumModel
 
 
 def _resolve_results_dir(save_path: str | Path | None) -> Tuple[Path, Path]:

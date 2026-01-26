@@ -8,7 +8,7 @@ from typing import Literal, Sequence
 import numpy as np
 import sympy as sp
 
-from models.dynamics import SystemModel
+from core.models.dynamics import SystemModel
 
 
 @dataclass

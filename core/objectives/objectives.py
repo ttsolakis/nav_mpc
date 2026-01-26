@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 import sympy as sp
-from models.dynamics import SystemModel
+from core.models.dynamics import SystemModel
 
 class Objective(ABC):
     """

@@ -4,7 +4,7 @@ import osqp
 import time
 
 # Import MPC2QP functionality, timing and logging utilities
-from mpc2qp import build_qp, make_workspace, update_qp, solve_qp
+from core.mpc2qp import build_qp, make_workspace, update_qp, solve_qp
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from utils.online_logger import OnlineLogger
 
@@ -23,7 +23,7 @@ def main():
     # -----------------------------------
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
-    from problem_setup import setup_path_tracking_unicycle
+    from core.problem_setup import setup_path_tracking_unicycle
     problem_name, system, objective, constraints, collision, animation = setup_path_tracking_unicycle.setup_problem()
 
     print(f"Setting up: {problem_name}")

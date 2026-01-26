@@ -11,7 +11,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Polygon
 from matplotlib.colors import ListedColormap, BoundaryNorm
 
-from models.unicycle_kinematic_model import UnicycleKinematicModel
+from core.models.unicycle_kinematic_model import UnicycleKinematicModel
 
 
 def _resolve_results_dir(save_path: str | Path | None) -> Tuple[Path, Path]:

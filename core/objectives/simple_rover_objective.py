@@ -1,8 +1,8 @@
 import numpy as np
 import sympy as sp
 
-from models.dynamics import SystemModel
-from objectives.objectives import Objective
+from core.models.dynamics import SystemModel
+from core.objectives.objectives import Objective
 
 
 class SimpleRoverObjective(Objective):

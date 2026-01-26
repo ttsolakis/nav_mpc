@@ -1,8 +1,8 @@
 # nav_mpc/setup_double_pendulum.py
 
-from models.double_pendulum_model import DoublePendulumModel
-from objectives.double_pendulum_objective import DoublePendulumObjective
-from constraints.system_constraints.double_pendulum_sys_constraints import DoublePendulumSystemConstraints
+from core.models.double_pendulum_model import DoublePendulumModel
+from core.objectives.double_pendulum_objective import DoublePendulumObjective
+from core.constraints.system_constraints.double_pendulum_sys_constraints import DoublePendulumSystemConstraints
 from simulation.animation.double_pendulum_animation import animate_double_pendulum
 
 

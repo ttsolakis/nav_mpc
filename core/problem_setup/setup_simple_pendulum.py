@@ -1,8 +1,8 @@
 # nav_mpc/setup_simple_pendulum.py
 
-from models.simple_pendulum_model import SimplePendulumModel
-from objectives.simple_pendulum_objective import SimplePendulumObjective
-from constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints
+from core.models.simple_pendulum_model import SimplePendulumModel
+from core.objectives.simple_pendulum_objective import SimplePendulumObjective
+from core.constraints.system_constraints.simple_pendulum_sys_constraints import SimplePendulumSystemConstraints
 from simulation.animation.simple_pendulum_animation import animate_pendulum
 
 

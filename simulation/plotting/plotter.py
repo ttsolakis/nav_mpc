@@ -8,7 +8,7 @@ from typing import Optional
 import numpy as np
 import matplotlib.pyplot as plt
 
-from models.dynamics import SystemModel
+from core.models.dynamics import SystemModel
 
 
 def _resolve_results_dir(save_path: str | Path | None) -> Path:

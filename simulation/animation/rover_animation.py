@@ -11,7 +11,7 @@ import matplotlib.colors as mcolors
 from matplotlib.colors import ListedColormap, BoundaryNorm
 
 
-from models.simple_rover_model import SimpleRoverModel
+from core.models.simple_rover_model import SimpleRoverModel
 
 
 def _resolve_results_dir(save_path: str | Path | None) -> Tuple[Path, Path]:

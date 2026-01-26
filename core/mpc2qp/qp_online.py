@@ -5,7 +5,7 @@ from typing import Tuple
 
 import numpy as np
 from numba import njit
-from constraints.collision_constraints.halfspace_corridor import compute_collision_halfspaces_horizon_inplace
+from core.constraints.collision_constraints.halfspace_corridor import compute_collision_halfspaces_horizon_inplace
 
 
 # ============================================================

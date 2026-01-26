@@ -10,10 +10,10 @@ import sympy as sp
 from scipy import sparse
 from sympy.utilities.autowrap import autowrap
 
-from models.dynamics import SystemModel
-from objectives.objectives import Objective
-from constraints.sys_constraints import SystemConstraints
-from constraints.collision_constraints.halfspace_corridor import HalfspaceCorridorCollisionConfig
+from core.models.dynamics import SystemModel
+from core.objectives.objectives import Objective
+from core.constraints.sys_constraints import SystemConstraints
+from core.constraints.collision_constraints.halfspace_corridor import HalfspaceCorridorCollisionConfig
 
 
 @dataclass(frozen=True, slots=True)
