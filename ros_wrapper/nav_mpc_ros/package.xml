@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>nav_mpc_ros</name>
+  <version>0.0.1</version>
+  <description>ROS2 wrapper for nav_mpc core + internal simulation</description>
+  <maintainer email="tas.tsolakis@gmail.com">tasos</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <!-- Optional if you later switch to standard msgs -->
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+
