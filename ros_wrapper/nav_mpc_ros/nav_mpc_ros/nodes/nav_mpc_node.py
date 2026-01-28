@@ -25,8 +25,8 @@ class NavMpcNode(Node):
         # ---------------- Params ----------------
         self.declare_parameter("dt_mpc", 0.1)
         self.declare_parameter("N", 25)
-        self.declare_parameter("embedded", True)
-        self.declare_parameter("debugging", False)
+        self.declare_parameter("embedded", False)
+        self.declare_parameter("debugging", True)
 
         # Needed for ref_builder
         self.declare_parameter("x_goal", [2.0, 2.0, 0.0, 0.0, 0.0])
@@ -41,14 +41,14 @@ class NavMpcNode(Node):
         self.sub_obstacles = self.create_subscription(
             Float32MultiArray, "/nav_mpc/obstacles_xy", self._obstacles_cb, 10
         )
-        self.sub_global_path = self.create_subscription(
-            Float32MultiArray, "/nav_mpc/global_path_xy", self._global_path_cb, 1
+        self.sub_path = self.create_subscription(
+            Float32MultiArray, "/nav_mpc/path_xy", self._path_cb, 1
         )
 
         # caches
         self.x_latest: np.ndarray | None = None
         self.obstacles_xy_latest: np.ndarray | None = None
-        self.global_path_xy: np.ndarray | None = None
+        self.path_xy: np.ndarray | None = None
 
         # ---------------- Setup MPC (once) ----------------
         dt = float(self.get_parameter("dt_mpc").value)
@@ -58,7 +58,8 @@ class NavMpcNode(Node):
         self.problem_name, self.system, self.objective, self.constraints, self.collision, _ = (
             setup_path_tracking_unicycle.setup_problem()
         )
-        self.get_logger().info(f"Setting up MPC: {self.problem_name}")
+        
+        self.get_logger().info(f"Setting up nav_mpc...")
 
         self.qp = build_qp(
             system=self.system,
@@ -108,6 +109,8 @@ class NavMpcNode(Node):
 
         self.timer = self.create_timer(dt, self._tick)
 
+        self.get_logger().info(f"nav_mpc setup complete.")
+
     def _state_cb(self, msg: Float32MultiArray) -> None:
         x = f32multi_to_np(msg, dtype=np.float64)
         if x.size > 0:
@@ -121,20 +124,22 @@ class NavMpcNode(Node):
             return
         self.obstacles_xy_latest = flat.reshape(-1, 2)
 
-    def _global_path_cb(self, msg: Float32MultiArray) -> None:
+    def _path_cb(self, msg: Float32MultiArray) -> None:
         flat = f32multi_to_np(msg, dtype=np.float64)
         if flat.size == 0:
-            self.global_path_xy = None
+            self.path_xy = None
             return
-        self.global_path_xy = flat.reshape(-1, 2)
+        self.path_xy = flat.reshape(-1, 2)
 
     def _tick(self) -> None:
-        if self.x_latest is None or self.obstacles_xy_latest is None or self.global_path_xy is None:
+        if self.x_latest is None or self.obstacles_xy_latest is None or self.path_xy is None:
             return  # wait until we have all inputs
+
+        self.get_logger().info(f"Solving QP...")
 
         x = self.x_latest
         obstacles_xy = self.obstacles_xy_latest
-        global_path = self.global_path_xy
+        global_path = self.path_xy
 
         N = int(self.get_parameter("N").value)
         dt = float(self.get_parameter("dt_mpc").value)
@@ -143,11 +148,14 @@ class NavMpcNode(Node):
         Xref_seq = self.ref_builder(global_path=global_path, x=x, N=N)
 
         # QP update
+        obstacles_xy = None
         t0 = time.perf_counter()
         A_xy, b_xy = update_qp(self.prob, x, self.X, self.U, self.qp, self.ws, Xref_seq, obstacles_xy=obstacles_xy)
         t1 = time.perf_counter()
 
         # Solve with time limit
+        self.get_logger().info(f"self.embedded: {self.embedded}")
+        self.get_logger().info(f"obstacles_xy: {obstacles_xy}")
         time_limit = max(0.0, dt - (t1 - t0))
         X, U, u0 = solve_qp(
             self.prob, self.nx, self.nu, N,

@@ -19,9 +19,11 @@ setup(
     description="ROS2 wrapper for nav_mpc",
     license="MIT",
     entry_points={
-        "console_scripts": [
-            "sim_node = nav_mpc_ros.nodes.sim_node:main",
-            "nav_mpc_node = nav_mpc_ros.nodes.nav_mpc_node:main",
+    'console_scripts': [
+        'sim_node = nav_mpc_ros.nodes.sim_node:main',
+        'lidar_node = nav_mpc_ros.nodes.lidar_node:main',
+        'path_node = nav_mpc_ros.nodes.path_node:main',
+        'nav_mpc_node = nav_mpc_ros.nodes.nav_mpc_node:main',
         ],
     },
 )
