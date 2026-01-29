@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<robot name="nav_mpc_robot">
+
+  <!-- tunables -->
+  <material name="gray">
+    <color rgba="0.6 0.6 0.6 1.0"/>
+  </material>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry>
+        <!-- body size: length, width, height -->
+        <box size="0.35 0.22 0.10"/>
+      </geometry>
+      <material name="gray"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.35 0.22 0.10"/>
+      </geometry>
+    </collision>
+
+    <inertial>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <mass value="2.0"/>
+      <!-- rough inertia, not critical for RViz -->
+      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="0.0" izz="0.02"/>
+    </inertial>
+  </link>
+
+</robot>

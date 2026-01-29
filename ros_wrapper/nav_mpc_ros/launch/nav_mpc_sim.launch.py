@@ -33,6 +33,9 @@ def generate_launch_description():
     # Optional: toggle RViz from CLI: use_rviz:=false
     use_rviz = LaunchConfiguration("use_rviz")
 
+    # Optional: toggle URDF + RobotModel from CLI: use_urdf:=false
+    use_urdf = LaunchConfiguration("use_urdf")
+
     # --- rates ---
     dt_mpc = 0.1
     dt_sim = 0.002
@@ -68,7 +71,8 @@ def generate_launch_description():
         params={
             "dt_sim": dt_sim,
             "x_init": x_init,
-            # if you added frame_ids / indices params, include them here too
+            # make sure your sim_node publishes tf: map -> base_link
+            # (and pose/twist topics if you added them)
         },
     )
 
@@ -101,10 +105,21 @@ def generate_launch_description():
         },
     )
 
-    # --- RViz ---
+    # --- URDF + robot_state_publisher (optional) ---
     pkg_share = get_package_share_directory("nav_mpc_ros")
-    rviz_config = os.path.join(pkg_share, "rviz", "nav_mpc_sim.rviz")
+    urdf_path = os.path.join(pkg_share, "urdf", "simple_robot.urdf")
 
+    robot_state_publisher_node = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        name="nav_mpc_robot_state_publisher",
+        output="screen",
+        parameters=[{"robot_description": open(urdf_path, "r").read()}],
+        condition=IfCondition(use_urdf),
+    )
+
+    # --- RViz ---
+    rviz_config = os.path.join(pkg_share, "rviz", "nav_mpc_sim.rviz")
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -116,9 +131,11 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("use_rviz", default_value="true"),
+        DeclareLaunchArgument("use_urdf", default_value="true"),
         path_node,
         sim_node,
         lidar_node,
         nav_mpc_node,
+        robot_state_publisher_node,
         rviz_node,
     ])
