@@ -4,10 +4,13 @@ from __future__ import annotations
 import time
 import numpy as np
 import osqp
+import os
 
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
+
+from utils.debug_dump import (get_default_debug_dir, dump_npz, format_first_iter_summary)
 
 from nav_mpc_ros.ros_paths import add_nav_mpc_repo_to_syspath
 add_nav_mpc_repo_to_syspath()
@@ -25,12 +28,18 @@ class NavMpcNode(Node):
         # ---------------- Params ----------------
         self.declare_parameter("dt_mpc", 0.1)
         self.declare_parameter("N", 25)
-        self.declare_parameter("embedded", False)
-        self.declare_parameter("debugging", True)
+        self.declare_parameter("embedded", True)
+        self.declare_parameter("debugging", False)
 
         # Needed for ref_builder
         self.declare_parameter("x_goal", [2.0, 2.0, 0.0, 0.0, 0.0])
         self.declare_parameter("velocity_ref", 0.5)
+
+        # Debugging
+        self.step_idx = 0
+        repo_root = os.environ.get("NAV_MPC_ROOT", os.path.expanduser("~/dev_ws/src/nav_mpc"))
+        self.declare_parameter("debug_dump_dir", get_default_debug_dir(repo_root))
+
 
         # ---------------- pubs/subs ----------------
         self.pub_cmd = self.create_publisher(Float32MultiArray, "/nav_mpc/cmd", 10)
@@ -135,7 +144,7 @@ class NavMpcNode(Node):
         if self.x_latest is None or self.obstacles_xy_latest is None or self.path_xy is None:
             return  # wait until we have all inputs
 
-        self.get_logger().info(f"Solving QP...")
+        self.get_logger().info(f"Solving QP... (step {self.step_idx})")
 
         x = self.x_latest
         obstacles_xy = self.obstacles_xy_latest
@@ -144,30 +153,37 @@ class NavMpcNode(Node):
         N = int(self.get_parameter("N").value)
         dt = float(self.get_parameter("dt_mpc").value)
 
+        # Ensure warm-start is consistent with current x on first tick
+        if self.step_idx == 0:
+            self.X = np.tile(x.reshape(1, -1), (N + 1, 1))
+            self.U = np.zeros((N, self.nu), dtype=float)
+
         # Build ref from latest state
         Xref_seq = self.ref_builder(global_path=global_path, x=x, N=N)
 
+        # Debug (optional in first iteration only)
+        if self.step_idx == 0 and self.debugging:
+            self.get_logger().info("[debug] dumped first-iter data to: " f"{dump_npz(dump_dir=str(self.get_parameter('debug_dump_dir').value), tag='ros', step_idx=self.step_idx, dt=dt, N=N, x=x, X=self.X, U=self.U, Xref_seq=Xref_seq, obstacles_xy=obstacles_xy, global_path=global_path)}")
+
         # QP update
-        obstacles_xy = None
         t0 = time.perf_counter()
         A_xy, b_xy = update_qp(self.prob, x, self.X, self.U, self.qp, self.ws, Xref_seq, obstacles_xy=obstacles_xy)
         t1 = time.perf_counter()
 
         # Solve with time limit
-        self.get_logger().info(f"self.embedded: {self.embedded}")
-        self.get_logger().info(f"obstacles_xy: {obstacles_xy}")
-        time_limit = max(0.0, dt - (t1 - t0))
-        X, U, u0 = solve_qp(
-            self.prob, self.nx, self.nu, N,
-            self.embedded, time_limit,
-            0,  # iteration index not needed here
-            debugging=self.debugging,
-            x=x,
-        )
-        self.X, self.U = X, U
+        time_limit = dt - (t1 - t0)
+        self.get_logger().info(f"time_limit: {time_limit}")
+        if self.embedded and time_limit <= 1e-6:
+            u0 = self.U[0].copy() if self.step_idx > 0 else np.zeros(self.nu)
+            # deadline miss: publish previous u0 (or zeros), skip solve
+            self.pub_cmd.publish(np_to_f32multi(u0))
+        else:
+            X, U, u0 = solve_qp(self.prob, self.nx, self.nu, N, self.embedded, time_limit, self.step_idx, debugging=self.debugging, x=x)
+            self.X, self.U = X, U
+            # publish computed cmd
+            self.pub_cmd.publish(np_to_f32multi(u0))
 
-        # publish cmd
-        self.pub_cmd.publish(np_to_f32multi(u0))
+        self.step_idx += 1
 
 def main(args=None):
     import rclpy

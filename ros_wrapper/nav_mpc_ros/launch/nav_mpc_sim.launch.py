@@ -80,8 +80,8 @@ def generate_launch_description():
         params={
             "dt_mpc": dt_mpc,
             "N": 25,
-            "embedded": False,
-            "debugging": True,
+            "embedded": True,
+            "debugging": False,
             "x_goal": x_goal,
             "velocity_ref": 0.5,
         },

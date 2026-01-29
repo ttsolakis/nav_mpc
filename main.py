@@ -2,11 +2,14 @@
 import numpy as np
 import osqp
 import time
+import os
 
-# Import MPC2QP functionality, timing and logging utilities
+# Import MPC2QP functionality, timing, debugging and logging utilities
 from core.mpc2qp import build_qp, make_workspace, update_qp, solve_qp
 from utils.profiling import init_timing_stats, update_timing_stats, print_timing_summary
 from utils.online_logger import OnlineLogger
+from utils.debug_dump import get_repo_root_from_file, get_default_debug_dir, dump_npz
+
 
 # Import simulation test harness components (simulation, plotting, sensing, path following)
 from simulation.simulator import ContinuousSimulator, SimulatorConfig
@@ -34,7 +37,7 @@ def main():
 
     # Solver settings (time-limited solver & printing online)
     embedded = True
-    debugging = False
+    debugging = True
     
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])  # Initial system state
@@ -138,10 +141,14 @@ def main():
         
         end_uQP_time = time.perf_counter()
 
+        if debugging and i == 0:
+            print(f"[debug] dumped main first-iter data to: " f"{dump_npz(dump_dir=get_default_debug_dir(get_repo_root_from_file(__file__)), tag='main', step_idx=i, dt=dt, N=N, x=x, X=X, U=U, Xref_seq=Xref_seq, obstacles_xy=obstacles_xy, global_path=global_path)}")
+
+
         # 2) Solve current QP and extract solution
         start_sQP_time = time.perf_counter()
 
-        time_limit = dt - (end_uQP_time - start_uQP_time)
+        time_limit = max(0.0, dt - (end_uQP_time - start_uQP_time))
         X, U, u0 = solve_qp(prob, nx, nu, N, embedded, time_limit, i, debugging=debugging, x=x)
 
         end_sQP_time = time.perf_counter()
