@@ -1,13 +1,20 @@
 import os
+
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+
 
 def _venv_python_and_env():
     repo_root = os.path.expanduser("~/dev_ws/src/nav_mpc")
-    map_path = os.path.join(repo_root, "simulation", "environment", "maps", "map.png")
     venv_python = os.path.join(repo_root, ".venv", "bin", "python")
     env = {"PYTHONPATH": repo_root + ":" + os.environ.get("PYTHONPATH", "")}
     return venv_python, env
+
 
 def _py_node(module: str, name: str, params: dict | None = None):
     venv_python, env = _venv_python_and_env()
@@ -21,11 +28,15 @@ def _py_node(module: str, name: str, params: dict | None = None):
         parameters=[params or {}],
     )
 
+
 def generate_launch_description():
+    # Optional: toggle RViz from CLI: use_rviz:=false
+    use_rviz = LaunchConfiguration("use_rviz")
+
     # --- rates ---
-    dt_mpc = 0.1           # 10 Hz MPC
-    dt_sim = 0.002         # 500 Hz simulation
-    dt_lidar = 0.1         # 10 Hz lidar
+    dt_mpc = 0.1
+    dt_sim = 0.002
+    dt_lidar = 0.1
 
     # --- shared config ---
     map_path = "map.png"
@@ -57,6 +68,7 @@ def generate_launch_description():
         params={
             "dt_sim": dt_sim,
             "x_init": x_init,
+            # if you added frame_ids / indices params, include them here too
         },
     )
 
@@ -71,6 +83,8 @@ def generate_launch_description():
             "invert_map": False,
             "lidar_range_max": 8.0,
             "lidar_angle_increment_deg": 0.72,
+            "publish_pointcloud": True,
+            "cloud_frame_id": "map",
         },
     )
 
@@ -87,4 +101,24 @@ def generate_launch_description():
         },
     )
 
-    return LaunchDescription([path_node, sim_node, lidar_node, nav_mpc_node])
+    # --- RViz ---
+    pkg_share = get_package_share_directory("nav_mpc_ros")
+    rviz_config = os.path.join(pkg_share, "rviz", "nav_mpc_sim.rviz")
+
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="nav_mpc_rviz",
+        output="screen",
+        arguments=["-d", rviz_config],
+        condition=IfCondition(use_rviz),
+    )
+
+    return LaunchDescription([
+        DeclareLaunchArgument("use_rviz", default_value="true"),
+        path_node,
+        sim_node,
+        lidar_node,
+        nav_mpc_node,
+        rviz_node,
+    ])

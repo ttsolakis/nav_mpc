@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import numpy as np
+import struct
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from std_msgs.msg import Float32MultiArray
+
+from sensor_msgs.msg import PointCloud2, PointField
+from std_msgs.msg import Header
 
 from nav_mpc_ros.ros_paths import add_nav_mpc_repo_to_syspath
 add_nav_mpc_repo_to_syspath()
@@ -17,6 +21,44 @@ from simulation.environment.occupancy_map import OccupancyMapConfig, OccupancyMa
 from simulation.lidar import LidarSimulator2D, LidarConfig
 
 
+def xy_to_pointcloud2(xy: np.ndarray, frame_id: str, stamp) -> PointCloud2:
+    """
+    Build PointCloud2 with fields x,y,z (float32). z=0.
+    xy: (N,2) float array
+    """
+    msg = PointCloud2()
+    msg.header = Header()
+    msg.header.frame_id = frame_id
+    msg.header.stamp = stamp
+
+    msg.height = 1
+    msg.width = int(xy.shape[0])
+
+    msg.fields = [
+        PointField(name="x", offset=0,  datatype=PointField.FLOAT32, count=1),
+        PointField(name="y", offset=4,  datatype=PointField.FLOAT32, count=1),
+        PointField(name="z", offset=8,  datatype=PointField.FLOAT32, count=1),
+    ]
+    msg.is_bigendian = False
+    msg.point_step = 12   # 3 * 4 bytes
+    msg.row_step = msg.point_step * msg.width
+    msg.is_dense = True
+
+    # Pack into bytes
+    if msg.width == 0:
+        msg.data = b""
+        return msg
+
+    # ensure float32 contiguous
+    xy32 = np.asarray(xy, dtype=np.float32)
+    z = np.zeros((xy32.shape[0], 1), dtype=np.float32)
+    xyz = np.hstack([xy32, z])  # (N,3)
+
+    # little-endian float32 packing
+    msg.data = xyz.tobytes()
+    return msg
+
+
 class LidarNode(Node):
     """
     Lidar sensor node (slow rate, realistic).
@@ -25,7 +67,8 @@ class LidarNode(Node):
       /nav_mpc/state         Float32MultiArray (nx)
 
     Publishes:
-      /nav_mpc/obstacles_xy  Float32MultiArray flattened [x0,y0,x1,y1,...]
+      /nav_mpc/obstacles_xy      Float32MultiArray flattened [x0,y0,x1,y1,...]  (for controller)
+      /nav_mpc/obstacles_cloud   sensor_msgs/PointCloud2 (for RViz)
     """
 
     def __init__(self) -> None:
@@ -41,6 +84,10 @@ class LidarNode(Node):
         self.declare_parameter("lidar_range_max", 8.0)
         self.declare_parameter("lidar_angle_increment_deg", 0.72)
 
+        # RViz output
+        self.declare_parameter("publish_pointcloud", True)
+        self.declare_parameter("cloud_frame_id", "map")  # should match RViz Fixed Frame
+
         dt_lidar = float(self.get_parameter("dt_lidar").value)
 
         # ---------------- QoS ----------------
@@ -48,6 +95,7 @@ class LidarNode(Node):
 
         # ---------------- pubs/subs ----------------
         self.pub_obstacles = self.create_publisher(Float32MultiArray, "/nav_mpc/obstacles_xy", qos)
+        self.pub_cloud = self.create_publisher(PointCloud2, "/nav_mpc/obstacles_cloud", qos)
         self.sub_state = self.create_subscription(Float32MultiArray, "/nav_mpc/state", self._state_cb, qos)
 
         # ---------------- map + lidar ----------------
@@ -73,6 +121,7 @@ class LidarNode(Node):
 
         # publish empty initially
         self.pub_obstacles.publish(np_to_f32multi(np.zeros((0, 2), dtype=float)))
+        self.pub_cloud.publish(xy_to_pointcloud2(np.zeros((0, 2), dtype=np.float32), "map", self.get_clock().now().to_msg()))
 
         self.timer = self.create_timer(dt_lidar, self._tick)
         self.get_logger().info(f"LidarNode started, running at {1.0/dt_lidar:.1f} Hz")
@@ -92,7 +141,14 @@ class LidarNode(Node):
         scan = self.lidar.scan(pose)
         obstacles_xy = self.lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
 
+        # For controller
         self.pub_obstacles.publish(np_to_f32multi(obstacles_xy))
+
+        # For RViz
+        if bool(self.get_parameter("publish_pointcloud").value):
+            frame_id = str(self.get_parameter("cloud_frame_id").value)
+            stamp = self.get_clock().now().to_msg()
+            self.pub_cloud.publish(xy_to_pointcloud2(obstacles_xy, frame_id, stamp))
 
 
 def main(args=None):

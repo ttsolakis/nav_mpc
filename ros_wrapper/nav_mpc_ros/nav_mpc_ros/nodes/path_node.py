@@ -9,6 +9,9 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from std_msgs.msg import Float32MultiArray
 
+from nav_msgs.msg import Path
+from geometry_msgs.msg import PoseStamped
+
 from nav_mpc_ros.ros_paths import add_nav_mpc_repo_to_syspath
 add_nav_mpc_repo_to_syspath()
 
@@ -27,7 +30,8 @@ class PathNode(Node):
     Global path node.
 
     Publishes (latched):
-      /nav_mpc/path_xy  Float32MultiArray flattened [x0,y0,x1,y1,...]
+      /nav_mpc/path_xy   Float32MultiArray flattened [x0,y0,x1,y1,...]
+      /nav_mpc/path      nav_msgs/Path (RViz-friendly)
     """
 
     def __init__(self) -> None:
@@ -40,7 +44,7 @@ class PathNode(Node):
         self.declare_parameter("invert_map", False)
 
         # Match launch: full state length 5, we use [:2]
-        self.declare_parameter("x_init", [-1.0, -2.0, float(np.pi/2), 0.0, 0.0])
+        self.declare_parameter("x_init", [-1.0, -2.0, float(np.pi / 2), 0.0, 0.0])
         self.declare_parameter("x_goal", [2.0, 2.0, 0.0, 0.0, 0.0])
 
         self.declare_parameter("rrt_max_iters", 6000)
@@ -50,6 +54,9 @@ class PathNode(Node):
         self.declare_parameter("rrt_collision_check_step", 0.02)
         self.declare_parameter("inflation_radius_m", 0.25)
 
+        # Frame for RViz
+        self.declare_parameter("frame_id", "map")
+
         # IMPORTANT: latched QoS
         latched_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -57,7 +64,10 @@ class PathNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self.pub_path = self.create_publisher(Float32MultiArray, "/nav_mpc/path_xy", latched_qos)
+
+        # Publishers
+        self.pub_path_xy = self.create_publisher(Float32MultiArray, "/nav_mpc/path_xy", latched_qos)
+        self.pub_path_rviz = self.create_publisher(Path, "/nav_mpc/path", latched_qos)
 
         # ---------------- Compute path once ----------------
         t0 = time.perf_counter()
@@ -93,21 +103,48 @@ class PathNode(Node):
         )
         path = smooth_and_resample_path(path, ds=0.05, smoothing=0.01, k=3)
 
-        t1 = time.perf_counter()
-        self.get_logger().info(f"PathNode started, path computed in {t1 - t0:.2f}s, publishing latched /nav_mpc/path_xy")
-
-        # Publish latched
         self._path_xy = path[:, :2].copy()
-        self.pub_path.publish(np_to_f32multi(self._path_xy))
+
+        t1 = time.perf_counter()
+        self.get_logger().info(
+            f"PathNode started, path computed in {t1 - t0:.2f}s, "
+            f"publishing latched /nav_mpc/path_xy and /nav_mpc/path"
+        )
+
+        # Publish latched once
+        self._publish_all()
 
         # Optional republish
         self.declare_parameter("republish_period_s", 10.0)
         republish_period = float(self.get_parameter("republish_period_s").value)
         if republish_period > 0.0:
-            self.create_timer(republish_period, self._republish)
+            self.create_timer(republish_period, self._publish_all)
 
-    def _republish(self) -> None:
-        self.pub_path.publish(np_to_f32multi(self._path_xy))
+    def _publish_all(self) -> None:
+        # 1) Float32MultiArray (existing)
+        self.pub_path_xy.publish(np_to_f32multi(self._path_xy))
+
+        # 2) RViz-friendly nav_msgs/Path
+        frame_id = str(self.get_parameter("frame_id").value)
+        stamp = self.get_clock().now().to_msg()
+
+        msg = Path()
+        msg.header.frame_id = frame_id
+        msg.header.stamp = stamp
+
+        poses: list[PoseStamped] = []
+        for x, y in self._path_xy:
+            ps = PoseStamped()
+            ps.header.frame_id = frame_id
+            ps.header.stamp = stamp
+            ps.pose.position.x = float(x)
+            ps.pose.position.y = float(y)
+            ps.pose.position.z = 0.0
+            ps.pose.orientation.w = 1.0  # identity
+            poses.append(ps)
+
+        msg.poses = poses
+        self.pub_path_rviz.publish(msg)
 
 
 def main(args=None):
