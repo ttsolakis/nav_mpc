@@ -39,7 +39,8 @@ class NavMpcNode(Node):
         self.step_idx = 0
         repo_root = os.environ.get("NAV_MPC_ROOT", os.path.expanduser("~/dev_ws/src/nav_mpc"))
         self.declare_parameter("debug_dump_dir", get_default_debug_dir(repo_root))
-
+        self._last_wait_log_s = 0.0
+        self._wait_log_period_s = 2.0  # print at most every 2 seconds
 
         # ---------------- pubs/subs ----------------
         self.pub_cmd = self.create_publisher(Float32MultiArray, "/nav_mpc/cmd", 10)
@@ -142,8 +143,16 @@ class NavMpcNode(Node):
 
     def _tick(self) -> None:
         if self.x_latest is None or self.obstacles_xy_latest is None or self.path_xy is None:
-            self.get_logger().info("Waiting for all inputs (state, obstacles, path)...")
-            return  # wait until we have all inputs
+            now = time.monotonic()
+            if now - self._last_wait_log_s >= self._wait_log_period_s:
+                self._last_wait_log_s = now
+                self.get_logger().info(
+                    "Waiting for inputs: "
+                    f"state={'OK' if self.x_latest is not None else '---'}, "
+                    f"obstacles={'OK' if self.obstacles_xy_latest is not None else '---'}, "
+                    f"path={'OK' if self.path_xy is not None else '---'}"
+                )
+            return
 
         if self.debugging:
             self.get_logger().info(f"Solving QP... (step {self.step_idx})")
