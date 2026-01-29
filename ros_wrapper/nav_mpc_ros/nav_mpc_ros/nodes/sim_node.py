@@ -60,7 +60,7 @@ class SimNode(Node):
         self.pub_state.publish(np_to_f32multi(self.x))
 
         self.timer = self.create_timer(dt_sim, self._tick)
-        self.get_logger().info(f"SimNode started: dt_sim={dt_sim}s (~{1.0/dt_sim:.1f} Hz)")
+        self.get_logger().info(f"SimNode started, running at {1.0/dt_sim:.1f} Hz")
 
     def _cmd_cb(self, msg: Float32MultiArray) -> None:
         u = f32multi_to_np(msg, dtype=np.float64)

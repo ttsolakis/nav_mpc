@@ -75,7 +75,7 @@ class LidarNode(Node):
         self.pub_obstacles.publish(np_to_f32multi(np.zeros((0, 2), dtype=float)))
 
         self.timer = self.create_timer(dt_lidar, self._tick)
-        self.get_logger().info(f"LidarNode started: dt_lidar={dt_lidar}s (~{1.0/dt_lidar:.1f} Hz)")
+        self.get_logger().info(f"LidarNode started, running at {1.0/dt_lidar:.1f} Hz")
 
     def _state_cb(self, msg: Float32MultiArray) -> None:
         x = f32multi_to_np(msg, dtype=np.float64)

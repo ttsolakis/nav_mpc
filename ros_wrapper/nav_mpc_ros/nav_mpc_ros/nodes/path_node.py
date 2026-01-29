@@ -94,14 +94,14 @@ class PathNode(Node):
         path = smooth_and_resample_path(path, ds=0.05, smoothing=0.01, k=3)
 
         t1 = time.perf_counter()
-        self.get_logger().info(f"Path computed in {t1 - t0:.2f}s, publishing latched /nav_mpc/path_xy")
+        self.get_logger().info(f"PathNode started, path computed in {t1 - t0:.2f}s, publishing latched /nav_mpc/path_xy")
 
         # Publish latched
         self._path_xy = path[:, :2].copy()
         self.pub_path.publish(np_to_f32multi(self._path_xy))
 
         # Optional republish
-        self.declare_parameter("republish_period_s", 5.0)
+        self.declare_parameter("republish_period_s", 10.0)
         republish_period = float(self.get_parameter("republish_period_s").value)
         if republish_period > 0.0:
             self.create_timer(republish_period, self._republish)

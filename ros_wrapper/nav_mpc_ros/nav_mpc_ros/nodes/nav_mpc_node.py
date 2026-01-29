@@ -68,7 +68,7 @@ class NavMpcNode(Node):
             setup_path_tracking_unicycle.setup_problem()
         )
         
-        self.get_logger().info(f"Setting up nav_mpc...")
+        self.get_logger().info(f"Setting up NavMpcNode...")
 
         self.qp = build_qp(
             system=self.system,
@@ -118,7 +118,7 @@ class NavMpcNode(Node):
 
         self.timer = self.create_timer(dt, self._tick)
 
-        self.get_logger().info(f"nav_mpc setup complete.")
+        self.get_logger().info(f"NavMpcNode started, running at {1.0/dt:.1f} Hz in embedded={self.embedded} mode.")
 
     def _state_cb(self, msg: Float32MultiArray) -> None:
         x = f32multi_to_np(msg, dtype=np.float64)
@@ -142,9 +142,11 @@ class NavMpcNode(Node):
 
     def _tick(self) -> None:
         if self.x_latest is None or self.obstacles_xy_latest is None or self.path_xy is None:
+            self.get_logger().info("Waiting for all inputs (state, obstacles, path)...")
             return  # wait until we have all inputs
 
-        self.get_logger().info(f"Solving QP... (step {self.step_idx})")
+        if self.debugging:
+            self.get_logger().info(f"Solving QP... (step {self.step_idx})")
 
         x = self.x_latest
         obstacles_xy = self.obstacles_xy_latest
@@ -172,7 +174,7 @@ class NavMpcNode(Node):
 
         # Solve with time limit
         time_limit = dt - (t1 - t0)
-        self.get_logger().info(f"time_limit: {time_limit}")
+        # self.get_logger().info(f"time_limit: {time_limit}")
         if self.embedded and time_limit <= 1e-6:
             u0 = self.U[0].copy() if self.step_idx > 0 else np.zeros(self.nu)
             # deadline miss: publish previous u0 (or zeros), skip solve
