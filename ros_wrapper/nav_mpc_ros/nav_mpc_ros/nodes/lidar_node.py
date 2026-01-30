@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 import rclpy
+from rclpy.time import Time
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from std_msgs.msg import Float32MultiArray
@@ -69,7 +70,7 @@ def scanlike_to_laserscan(scan, frame_id: str, stamp) -> LaserScan:
     # LaserScan wants a Python list of floats
     msg.ranges = [float(r) for r in np.asarray(scan.ranges).reshape(-1)]
     msg.intensities = msg.ranges
-    
+
     return msg
 
 
@@ -140,7 +141,7 @@ class LidarNode(Node):
         self.x_latest: np.ndarray | None = None
 
         # publish empty initially
-        stamp0 = self.get_clock().now().to_msg()
+        stamp0 = Time().to_msg()
         self.pub_obstacles.publish(np_to_f32multi(np.zeros((0, 2), dtype=float)))
 
         cloud_frame = str(self.get_parameter("cloud_frame_id").value)
@@ -180,7 +181,8 @@ class LidarNode(Node):
 
         # Publish LaserScan for RViz
         if bool(self.get_parameter("publish_scan").value):
-            stamp = self.get_clock().now().to_msg()
+            # stamp = self.get_clock().now().to_msg()  comeented this for line below:
+            stamp = Time().to_msg()
             scan_frame = str(self.get_parameter("scan_frame_id").value)
             self.pub_scan.publish(scanlike_to_laserscan(scan, scan_frame, stamp))
 
