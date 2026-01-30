@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import numpy as np
-import struct
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from std_msgs.msg import Float32MultiArray
-
-from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
+
+from sensor_msgs.msg import PointCloud2, PointField, LaserScan
 
 from nav_mpc_ros.ros_paths import add_nav_mpc_repo_to_syspath
 add_nav_mpc_repo_to_syspath()
@@ -35,27 +34,42 @@ def xy_to_pointcloud2(xy: np.ndarray, frame_id: str, stamp) -> PointCloud2:
     msg.width = int(xy.shape[0])
 
     msg.fields = [
-        PointField(name="x", offset=0,  datatype=PointField.FLOAT32, count=1),
-        PointField(name="y", offset=4,  datatype=PointField.FLOAT32, count=1),
-        PointField(name="z", offset=8,  datatype=PointField.FLOAT32, count=1),
+        PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+        PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+        PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
     ]
     msg.is_bigendian = False
-    msg.point_step = 12   # 3 * 4 bytes
+    msg.point_step = 12  # 3 * 4 bytes
     msg.row_step = msg.point_step * msg.width
     msg.is_dense = True
 
-    # Pack into bytes
     if msg.width == 0:
         msg.data = b""
         return msg
 
-    # ensure float32 contiguous
     xy32 = np.asarray(xy, dtype=np.float32)
     z = np.zeros((xy32.shape[0], 1), dtype=np.float32)
     xyz = np.hstack([xy32, z])  # (N,3)
-
-    # little-endian float32 packing
     msg.data = xyz.tobytes()
+    return msg
+
+
+def scanlike_to_laserscan(scan, frame_id: str, stamp) -> LaserScan:
+    msg = LaserScan()
+    msg.header = Header()
+    msg.header.frame_id = frame_id
+    msg.header.stamp = stamp
+
+    msg.angle_min = float(scan.angle_min)
+    msg.angle_max = float(scan.angle_max)
+    msg.angle_increment = float(scan.angle_increment)
+    msg.range_min = float(scan.range_min)
+    msg.range_max = float(scan.range_max)
+
+    # LaserScan wants a Python list of floats
+    msg.ranges = [float(r) for r in np.asarray(scan.ranges).reshape(-1)]
+    msg.intensities = msg.ranges
+    
     return msg
 
 
@@ -64,11 +78,12 @@ class LidarNode(Node):
     Lidar sensor node (slow rate, realistic).
 
     Subscribes:
-      /nav_mpc/state         Float32MultiArray (nx)
+      /nav_mpc/state           Float32MultiArray (nx)
 
     Publishes:
-      /nav_mpc/obstacles_xy      Float32MultiArray flattened [x0,y0,x1,y1,...]  (for controller)
-      /nav_mpc/obstacles_cloud   sensor_msgs/PointCloud2 (for RViz)
+      /nav_mpc/obstacles_xy    Float32MultiArray flattened [x0,y0,x1,y1,...]  (for controller)
+      /nav_mpc/obstacles_cloud sensor_msgs/PointCloud2 (world frame, for RViz/debug)
+      /nav_mpc/scan            sensor_msgs/LaserScan (robot frame, for RViz)
     """
 
     def __init__(self) -> None:
@@ -84,9 +99,12 @@ class LidarNode(Node):
         self.declare_parameter("lidar_range_max", 8.0)
         self.declare_parameter("lidar_angle_increment_deg", 0.72)
 
-        # RViz output
+        # RViz output toggles / frames
         self.declare_parameter("publish_pointcloud", True)
-        self.declare_parameter("cloud_frame_id", "map")  # should match RViz Fixed Frame
+        self.declare_parameter("cloud_frame_id", "map")  # RViz fixed frame typically "map"
+
+        self.declare_parameter("publish_scan", True)
+        self.declare_parameter("scan_frame_id", "base_link")  # must exist in TF
 
         dt_lidar = float(self.get_parameter("dt_lidar").value)
 
@@ -96,6 +114,8 @@ class LidarNode(Node):
         # ---------------- pubs/subs ----------------
         self.pub_obstacles = self.create_publisher(Float32MultiArray, "/nav_mpc/obstacles_xy", qos)
         self.pub_cloud = self.create_publisher(PointCloud2, "/nav_mpc/obstacles_cloud", qos)
+        self.pub_scan = self.create_publisher(LaserScan, "/nav_mpc/scan", qos)
+
         self.sub_state = self.create_subscription(Float32MultiArray, "/nav_mpc/state", self._state_cb, qos)
 
         # ---------------- map + lidar ----------------
@@ -120,8 +140,25 @@ class LidarNode(Node):
         self.x_latest: np.ndarray | None = None
 
         # publish empty initially
+        stamp0 = self.get_clock().now().to_msg()
         self.pub_obstacles.publish(np_to_f32multi(np.zeros((0, 2), dtype=float)))
-        self.pub_cloud.publish(xy_to_pointcloud2(np.zeros((0, 2), dtype=np.float32), "map", self.get_clock().now().to_msg()))
+
+        cloud_frame = str(self.get_parameter("cloud_frame_id").value)
+        self.pub_cloud.publish(xy_to_pointcloud2(np.zeros((0, 2), dtype=np.float32), cloud_frame, stamp0))
+
+        if bool(self.get_parameter("publish_scan").value):
+            scan_frame = str(self.get_parameter("scan_frame_id").value)
+            empty_scan = self.lidar.scan(np.array([0.0, 0.0, 0.0], dtype=float))
+            # override ranges -> inf to be explicit
+            empty_scan = type(empty_scan)(
+                angle_min=empty_scan.angle_min,
+                angle_max=empty_scan.angle_max,
+                angle_increment=empty_scan.angle_increment,
+                range_min=empty_scan.range_min,
+                range_max=empty_scan.range_max,
+                ranges=np.full_like(empty_scan.ranges, np.inf, dtype=float),
+            )
+            self.pub_scan.publish(scanlike_to_laserscan(empty_scan, scan_frame, stamp0))
 
         self.timer = self.create_timer(dt_lidar, self._tick)
         self.get_logger().info(f"LidarNode started, running at {1.0/dt_lidar:.1f} Hz")
@@ -138,17 +175,26 @@ class LidarNode(Node):
         x = self.x_latest
         pose = np.array([x[0], x[1], x[2]], dtype=float)
 
+        # Raycast scan (ranges in robot frame)
         scan = self.lidar.scan(pose)
+
+        # Publish LaserScan for RViz
+        if bool(self.get_parameter("publish_scan").value):
+            stamp = self.get_clock().now().to_msg()
+            scan_frame = str(self.get_parameter("scan_frame_id").value)
+            self.pub_scan.publish(scanlike_to_laserscan(scan, scan_frame, stamp))
+
+        # Convert scan -> world hit points
         obstacles_xy = self.lidar.points_world_from_scan(scan, pose).astype(float, copy=False)
 
         # For controller
         self.pub_obstacles.publish(np_to_f32multi(obstacles_xy))
 
-        # For RViz
+        # For RViz/debug
         if bool(self.get_parameter("publish_pointcloud").value):
-            frame_id = str(self.get_parameter("cloud_frame_id").value)
             stamp = self.get_clock().now().to_msg()
-            self.pub_cloud.publish(xy_to_pointcloud2(obstacles_xy, frame_id, stamp))
+            cloud_frame = str(self.get_parameter("cloud_frame_id").value)
+            self.pub_cloud.publish(xy_to_pointcloud2(obstacles_xy, cloud_frame, stamp))
 
 
 def main(args=None):

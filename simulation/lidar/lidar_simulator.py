@@ -216,3 +216,119 @@ class LidarSimulator2D:
             r += step
 
         return max_r
+
+
+    @staticmethod
+    def world_to_robot_points(points_world_xy: np.ndarray, pose_xy_yaw: np.ndarray) -> np.ndarray:
+        """
+        Transform WORLD-frame points (N,2) -> ROBOT frame (N,2)
+        Robot frame: x forward, y left.
+        """
+        if points_world_xy.size == 0:
+            return np.zeros((0, 2), dtype=float)
+
+        x, y, yaw = float(pose_xy_yaw[0]), float(pose_xy_yaw[1]), float(pose_xy_yaw[2])
+
+        dx = points_world_xy[:, 0] - x
+        dy = points_world_xy[:, 1] - y
+
+        c = np.cos(-yaw)
+        s = np.sin(-yaw)
+
+        xr = c * dx - s * dy
+        yr = s * dx + c * dy
+        return np.column_stack([xr, yr])
+
+    @staticmethod
+    def robot_to_world_points(points_robot_xy: np.ndarray, pose_xy_yaw: np.ndarray) -> np.ndarray:
+        """
+        Transform ROBOT-frame points (N,2) -> WORLD frame (N,2)
+        """
+        if points_robot_xy.size == 0:
+            return np.zeros((0, 2), dtype=float)
+
+        x, y, yaw = float(pose_xy_yaw[0]), float(pose_xy_yaw[1]), float(pose_xy_yaw[2])
+
+        xr = points_robot_xy[:, 0]
+        yr = points_robot_xy[:, 1]
+
+        c = np.cos(yaw)
+        s = np.sin(yaw)
+
+        xw = x + c * xr - s * yr
+        yw = y + s * xr + c * yr
+        return np.column_stack([xw, yw])
+
+    def ranges_from_points_robot(
+        self,
+        points_robot_xy: np.ndarray,
+        *,
+        angle_min: float | None = None,
+        angle_max: float | None = None,
+        angle_increment: float | None = None,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> np.ndarray:
+        """
+        Convert ROBOT-frame hit points (N,2) into a LaserScan-like ranges array (n_rays,).
+        Keeps the closest point per beam. No point -> inf.
+
+        This is useful if you have points (e.g., from world -> robot transform)
+        and want a scan-like rendering.
+        """
+        if angle_min is None: angle_min = self.cfg.angle_min
+        if angle_max is None: angle_max = self.cfg.angle_max
+        if angle_increment is None: angle_increment = self.cfg.angle_increment
+        if range_min is None: range_min = self.cfg.range_min
+        if range_max is None: range_max = self.cfg.range_max
+
+        n = int(np.floor((angle_max - angle_min) / angle_increment)) + 1
+        ranges = np.full(n, np.inf, dtype=float)
+
+        if points_robot_xy.size == 0:
+            return ranges
+
+        px = points_robot_xy[:, 0]
+        py = points_robot_xy[:, 1]
+
+        r = np.hypot(px, py)
+        a = np.arctan2(py, px)
+
+        valid = (r >= range_min) & (r <= range_max) & (a >= angle_min) & (a <= angle_max)
+        if not np.any(valid):
+            return ranges
+
+        r = r[valid]
+        a = a[valid]
+
+        # nearest beam index
+        idx = np.floor((a - angle_min) / angle_increment + 0.5).astype(np.int32)
+        idx = np.clip(idx, 0, n - 1)
+
+        for i, ri in zip(idx, r):
+            if ri < ranges[i]:
+                ranges[i] = float(ri)
+
+        return ranges
+
+    def ranges_from_points_world(self, points_world_xy: np.ndarray, pose_xy_yaw: np.ndarray, **kwargs) -> np.ndarray:
+        """
+        WORLD-frame points -> ROBOT frame -> scan ranges.
+        """
+        pr = self.world_to_robot_points(points_world_xy, pose_xy_yaw)
+        return self.ranges_from_points_robot(pr, **kwargs)
+
+    def scan_from_points_world(self, points_world_xy: np.ndarray, pose_xy_yaw: np.ndarray) -> LaserScanLike:
+        """
+        Convenience: WORLD-frame points -> LaserScanLike (using this lidar config).
+        """
+        ranges = self.ranges_from_points_world(points_world_xy, pose_xy_yaw)
+        return LaserScanLike(
+            angle_min=self.cfg.angle_min,
+            angle_max=self.cfg.angle_max,
+            angle_increment=self.cfg.angle_increment,
+            range_min=self.cfg.range_min,
+            range_max=self.cfg.range_max,
+            ranges=np.asarray(ranges, dtype=float),
+        )
+    
