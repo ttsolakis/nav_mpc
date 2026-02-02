@@ -1,19 +1,19 @@
 # 🧭 nav_mpc — Realtime Nonlinear MPC for Autonomous Navigation
 
-**nav_mpc** is a lightweight, high-performance Python framework for navigation using **real-time** Model Predictive Control (MPC).
+**nav_mpc** is a lightweight, high-performance Python framework for navigation using **real-time** Model Predictive Control (MPC). MPC is an attractive control approach because it naturally handles constraints of different types and flexibly incorporates diverse control objectives. 
 
-MPC is attractive because it naturally handles constraints and flexibly incorporates diverse control objectives. However, nonlinear MPC can be computationally expensive and may exceed the control-loop period—especially on embedded hardware.
+However, nonlinear MPC is often computationally expensive. For many systems, the solver time can exceed the control-loop period, especially on embedded hardware where computation is limited. 
 
-In contrast, Quadratic Programs (QPs) can be solved extremely quickly, and **OSQP** is particularly well suited for this. The core idea behind **nav_mpc** is to convert a fully nonlinear MPC problem into a **Linear Time-Varying (LTV) MPC** QP approximation that can be solved fast enough that linearization error remains small and performance stays strong.
+In contrast, Quadratic Programs (QPs) can be solved extremely quickly, and OSQP is particularly well suited for this. The core idea behind this framework is to convert a fully nonlinear MPC problem into a Linear Time-Varying (LTV) MPC problem that can be solved fast enough so that the linearization error remains small and does not degrade system performance.
 
 The framework combines:
 
-- **Symbolic definition**: nonlinear dynamics, constraints, and objective written symbolically, exactly as on paper.
-- **Automatic QP formulation**: linearization and QP construction handled automatically.
-- **Cython compilation**: online-evaluated functions compiled to native code for speed.
-- **Real-time OSQP solving**: configurable time limit to guarantee real-time feasibility.
-- **Integrated simulator**: consistent nonlinear simulation + plotting + animations for rapid iteration.
-- **ROS 2 wrapper**: the same controller + simulation harness exposed as ROS 2 nodes for asynchronous, system-style testing and sim2real workflows.
+- **Symbolic definition**: Users define the nonlinear dynamics, constraints, and objective symbolically, exactly as they would on paper. 
+- **Automatic QP formulation** : The framework linearizes the original problem and constructs the corresponding parametric QP approximation automatically. 
+- **Cython compilation**: All functions that must be evaluated online for the parametric QP are compiled with Cython to achieve optimal runtime performance. 
+- **Real-time OSQP solving**: The QP is solved with OSQP extremely fast, using a configurable time limit to guarantee real-time feasibility. 
+- **Integrated simulator for rapid prototyping**: The same symbolic model used by the MPC is also used for simulation, with built-in plotting and animation tools to iterate quickly for rapid development before deploying on embedded hardware.
+- **Integrated ROS2 functionality**: The core functionality of nav_mpc and the simulation harness are wrapped with ROS2 nodes to test the framework in asynchronous, ROS-style information exchange.
 
 Together, these components enable deterministic nonlinear MPC on modest hardware, suitable for embedded robotic applications such as **UGVs**, **USVs**, **UAVs**, and more.
 
@@ -47,6 +47,18 @@ nav_mpc/
 - Double pendulum 
 - Kinematic Rover
 
+--- 
+
+## 🎯 Why nav_mpc? 
+
+**nav_mpc** provides: -
+
+An easy way to define a full nonlinear MPC problem — dynamics, constraints, and objectives are written symbolically, just like on paper. 
+- A fast development workflow in Python with integrated simulation and result generation, combined with Cython compilation for ultra-fast numerical evaluation. 
+- Real-time performance: the controller runs ultra-fast with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines. 
+- A clean, minimal set of dependencies and a research-friendly architecture that enables rapid prototyping, fast iteration, and straightforward extension to new robotic systems. 
+- A smooth transition to embedded hardware via ROS2 wrappers. 
+
 ---
 
 ## 🚀 Getting Started
@@ -69,7 +81,7 @@ This will:
 
 ---
 
-### 🤖 Install and Run with ROS2
+### 🤖 Build and Run with ROS2
 
 > This section assumes a working ROS2 installation and an existing colcon workspace (e.g., dev_ws).
 > Tested with ROS2 Jazzy on Ubuntu 24.04.
