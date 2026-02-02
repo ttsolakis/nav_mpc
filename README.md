@@ -70,11 +70,10 @@ This will:
 ---
 
 ### 🤖 Install and Run with ROS2
+
 > This section assumes a working ROS2 installation and an existing colcon workspace (e.g., dev_ws).
 > Tested with ROS2 Jazzy on Ubuntu 24.04.
 
-
-### Build
 ```bash
 cd ~/dev_ws
 source /opt/ros/<distro>/setup.bash
