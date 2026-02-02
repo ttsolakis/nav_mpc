@@ -14,6 +14,8 @@ The framework combines:
 - **Real-time OSQP solving**: The QP is solved with OSQP extremely fast, using a configurable time limit to guarantee real-time feasibility.
 - **Integrated simulator for rapid prototyping**: The same symbolic model used by the MPC is also used for simulation, with built-in plotting and animation 
 tools to iterate quickly for rapid development before deploying on embedded hardware.
+- **Integrated ROS2 functionality for smooth sim2real transition**: The core functionality of nav_mpc and the simulation harness are wrapped with ROS2 nodes to test the 
+framework in asynchronous, ROS-style information exchange.
 
 Together, these components enable nonlinear MPC to run reliably and deterministically even on modest computing platforms, making it suitable for embedded robotic applications such as **ground vehicles (UGVs)**, **surface vessels (USVs)**, **aerial vehicles (UAVs)**, and more.
 
@@ -34,15 +36,11 @@ Together, these components enable nonlinear MPC to run reliably and deterministi
 ### 🤖 **3. Clean modular architecture**
 ```
 nav_mpc/
-├── models/             # system dynamics (symbolic)
-├── objectives/         # cost functions (symbolic)
-├── constraints/        # system + collision constraints (symbolic)
-├── problem_setup/      # problem definitions (model, objective, constraints, animation)
-├── mpc2qp/             # core functionality: offline QP formulation + fast online updates
-├── simulation/         # simulator, plotting, animations
-├── utils/              # profiling, debugging, system info
-├── wrappers/           # ROS2 interface (coming)
-└── main.py             # generic MPC runner (problem-agnostic)
+├── core/               # symbolic problem definition (dynamics, constraints, objective) and core mpc2qp functionality
+├── simulation/         # simulation harness for map, path, dynamics, lidar, plotting and animations
+├── utils/              # profiling, debugging, logging and system info
+├── nav_mpc_ros/        # ROS2 interface (core/ and simulation/ wrapped in ROS2 nodes)
+└── main.py             # generic MPC runner (problem-agnostic/ros-agnostic)
 ```
 
 ### 🔌 **4. Extensible to arbitrary systems**
@@ -59,7 +57,7 @@ nav_mpc/
 - A fast development workflow in Python with integrated simulation and result generation, combined with Cython compilation for ultra-fast numerical evaluation.
 - Real-time performance: the controller runs ultra-fast with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines.
 - A clean, minimal set of dependencies and a research-friendly architecture that enables rapid prototyping, fast iteration, and straightforward extension to new robotic systems.
-
+- A smooth transition to embedded hardware via ROS2 wrappers.
 ---
 
 ## 🚀 Getting Started
