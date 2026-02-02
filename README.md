@@ -1,68 +1,57 @@
 # 🧭 nav_mpc — Realtime Nonlinear MPC for Autonomous Navigation
 
-**nav_mpc** is a lightweight, high-performance Python framework for navigation using **real-time** Model Predictive Control (MPC). 
+**nav_mpc** is a lightweight, high-performance Python framework for navigation using **real-time** Model Predictive Control (MPC).
 
-MPC is an attractive control approach because it naturally handles constraints of different types and flexibly incorporates diverse control objectives. However, nonlinear MPC is often computationally expensive. For many systems, the solver time can exceed the control-loop period, especially on embedded hardware where computation is limited.
+MPC is attractive because it naturally handles constraints and flexibly incorporates diverse control objectives. However, nonlinear MPC can be computationally expensive and may exceed the control-loop period—especially on embedded hardware.
 
-In contrast, Quadratic Programs (QPs) can be solved extremely quickly, and OSQP is particularly well suited for this. The core idea behind this framework is to convert a fully nonlinear MPC problem into a Linear Time-Varying (LTV) MPC problem that can be solved fast enough so that the linearization error remains small and does not degrade system performance.
+In contrast, Quadratic Programs (QPs) can be solved extremely quickly, and **OSQP** is particularly well suited for this. The core idea behind **nav_mpc** is to convert a fully nonlinear MPC problem into a **Linear Time-Varying (LTV) MPC** QP approximation that can be solved fast enough that linearization error remains small and performance stays strong.
 
 The framework combines:
 
-- **Symbolic definition**: Users define the nonlinear dynamics, constraints, and objective symbolically, exactly as they would on paper.
-- **Automatic QP formulation** : The framework linearizes the original problem and constructs the corresponding parametric QP approximation automatically.
-- **Cython compilation**: All functions that must be evaluated online for the parametric QP are compiled with Cython to achieve optimal runtime performance.
-- **Real-time OSQP solving**: The QP is solved with OSQP extremely fast, using a configurable time limit to guarantee real-time feasibility.
-- **Integrated simulator for rapid prototyping**: The same symbolic model used by the MPC is also used for simulation, with built-in plotting and animation 
-tools to iterate quickly for rapid development before deploying on embedded hardware.
-- **Integrated ROS2 functionality for smooth sim2real transition**: The core functionality of nav_mpc and the simulation harness are wrapped with ROS2 nodes to test the 
-framework in asynchronous, ROS-style information exchange.
+- **Symbolic definition**: nonlinear dynamics, constraints, and objective written symbolically, exactly as on paper.
+- **Automatic QP formulation**: linearization and QP construction handled automatically.
+- **Cython compilation**: online-evaluated functions compiled to native code for speed.
+- **Real-time OSQP solving**: configurable time limit to guarantee real-time feasibility.
+- **Integrated simulator**: consistent nonlinear simulation + plotting + animations for rapid iteration.
+- **ROS 2 wrapper**: the same controller + simulation harness exposed as ROS 2 nodes for asynchronous, system-style testing and sim2real workflows.
 
-Together, these components enable nonlinear MPC to run reliably and deterministically even on modest computing platforms, making it suitable for embedded robotic applications such as **ground vehicles (UGVs)**, **surface vessels (USVs)**, **aerial vehicles (UAVs)**, and more.
+Together, these components enable deterministic nonlinear MPC on modest hardware, suitable for embedded robotic applications such as **UGVs**, **USVs**, **UAVs**, and more.
 
 ---
 
 ## ✨ Key Features
 
-### 🔧 **1. Fully parametric, symbolic MPC pipeline**
+### 🔧 1. Fully parametric, symbolic MPC pipeline
 - Symbolic linearization around operating trajectories
 - Automatic Jacobians and discrete-time dynamics
 - QP constructed explicitly for transparency & speed
 
-### ⚡ **2. C-accelerated QP evaluation via SymPy autowrap + Cython**
+### ⚡ 2. C-accelerated online QP evaluation (SymPy autowrap + Cython) and OSQP solution
 - Expensive symbolic expressions compiled to native machine code
-- Runtime QP evaluation **up to 5× faster** than simple Python
-- Ideal for Jetson, Raspberry Pi, and embedded control CPUs
+- Fast online QP assembly with Cython
+- Fast online QP solution with OSQP
+- Suitable for Jetson / Raspberry Pi / embedded CPUs
 
-### 🤖 **3. Clean modular architecture**
+### 🧱 3. Clean modular architecture
 ```
 nav_mpc/
-├── core/               # symbolic problem definition (dynamics, constraints, objective) and core mpc2qp functionality
-├── simulation/         # simulation harness for map, path, dynamics, lidar, plotting and animations
-├── utils/              # profiling, debugging, logging and system info
-├── nav_mpc_ros/        # ROS2 interface (core/ and simulation/ wrapped in ROS2 nodes)
-└── main.py             # generic MPC runner (problem-agnostic/ros-agnostic)
+├── core/               # symbolic problem definitions + MPC→QP core
+├── simulation/         # map/path/lidar + simulator + plotting/animations
+├── utils/              # profiling, debugging, logging, system info
+├── nav_mpc_ros/        # ROS 2 package wrapping core/ + simulation/ as nodes
+└── main.py             # ROS-agnostic MPC runner (example entry point)
 ```
 
 ### 🔌 **4. Extensible to arbitrary systems**
-- Simple pendulum (included)
-- Double pendulum (included)
-- Kinematic Rover (included)
+- Simple pendulum
+- Double pendulum 
+- Kinematic Rover
 
-
----
-
-## 🎯 Why nav_mpc?
-**nav_mpc** provides:
-- An easy way to define a full nonlinear MPC problem — dynamics, constraints, and objectives are written symbolically, just like on paper.
-- A fast development workflow in Python with integrated simulation and result generation, combined with Cython compilation for ultra-fast numerical evaluation.
-- Real-time performance: the controller runs ultra-fast with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines.
-- A clean, minimal set of dependencies and a research-friendly architecture that enables rapid prototyping, fast iteration, and straightforward extension to new robotic systems.
-- A smooth transition to embedded hardware via ROS2 wrappers.
 ---
 
 ## 🚀 Getting Started
 
-### 1️⃣ Installation
+### 🧪 Install and Run in pure Python (ROS-agnostic)
 
 ```bash
 git clone https://github.com/ttsolakis/nav_mpc.git
@@ -70,137 +59,37 @@ cd nav_mpc
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
----
-
-### 2️⃣ Problem Setup
-
-#### 🤖 System, objective, constraints & animation
-
-Each MPC problem (system, objective, constraints, animation) is defined in a
-dedicated **setup file** inside:
-
-```bash
- nav_mpc/problem_setup/
- ```
-
-A problem is selected in main.py via a single import:
-
-```python
-from problem_setup import setup_<custom_problem>
-problem_name, system, objective, constraints, animation = setup_<custom_problem>.setup_problem()
-
-```
-
-These are defined **symbolically** and automatically linearized:
-
-- `system`: nonlinear dynamics
-- `objective`: tracking / regulation cost
-- `constraints`: state and input limits
-- `animation`: animation of problem
-
-Changing the system (e.g. pendulum → rover) requires **no changes to the MPC core**.
-
----
-
-#### 🔧 General settings
-
-```python
-debugging = True         # print solver solution at each step (coming)
-profiling = True         # collect timing statistics
-show_system_info = True  # print CPU / OS info (Linux only)
-```
-
----
-
-#### ⏱ Embedded / realtime mode
-
-```python
-embedded = True
-```
-
-When enabled, a **time limit is set on OSQP** so that the control loop remains realtime-feasible. This is essential for embedded hardware and hard real-time control.
-
----
-
-#### 📍 Initial state
-
-```python
-x_init = np.array([0.0, 0.0])      # initial state (problem-dependent)
-```
-
-The reference / goal state is defined inside the objective and is problem-specific.
-
----
-
-#### 📐 MPC horizon and sampling time
-
-```python
-N  = 40     # prediction horizon [steps]
-dt = 0.02   # sampling time [s]
-```
-
-- Larger `N` → better foresight, higher computation cost
-- Smaller `dt` → faster control loop, tighter real-time constraints
-
----
-
-#### 🧪 Simulation parameters
-
-```python
-tsim    = 2.0   # total simulation time [s]
-sim_cfg = SimulatorConfig(
-    dt=dt,
-    method="rk4",
-    substeps=10
-)
-```
-
-The simulator uses the **same nonlinear model** as the MPC, ensuring consistency.
-
----
-
-### 3️⃣ Run an example
-
-Simply run:
-
-```bash
 python main.py
 ```
-
 This will:
-
-- linearize and build the parametric QP offline
+- linearize the nonlinear problem and build the parametric QP offline
 - run realtime LTV-MPC in closed loop
 - print detailed timing statistics
-- generate plots (generic for any system)
-- generate animation (animation is system-specific)
+- generate plots/animations under `results/` (auto-generated at root)
 
-Results are saved to:
+---
 
-```text
-nav_mpc/results/
+### 🤖 Install and Run with ROS2
+> This section assumes a working ROS2 installation and an existing colcon workspace (e.g., dev_ws).
+> Tested with ROS2 Jazzy on Ubuntu 24.04.
+
+
+### Build
+```bash
+cd ~/dev_ws
+source /opt/ros/<distro>/setup.bash
+colcon build --packages-select nav_mpc_ros --symlink-install
+source install/setup.bash
+ros2 launch nav_mpc_ros nav_mpc_sim.launch.py
 ```
-
-Directory is created automatically.
-
----
-
-### 4️⃣ Interpreting the results
-
-After execution you will see:
-
-- **State trajectories** (with bounds and references)
-- **Input trajectories** (with actuator limits)
-- **Animations** (pendulum, double pendulum, etc.)
-- **Timing statistics** (QP evaluation, QP solution, Total MPC, Simulation)
-
-These numbers demonstrate **deterministic real-time MPC** on modest hardware.
+This will:
+- start the full ROS2 simulation pipeline (map, path, lidar, simulator, MPC)
+- ROS2 nodes wrap and reuse the same `core/` MPC logic and `simulation/` components
+- Spawn RVIZ for visualization
 
 ---
 
-## 🧪 Examples
+## 🕹️ Examples
 
 Examples run with:
 
@@ -208,25 +97,6 @@ OS:       Linux 6.14.0-37-generic
 Machine:  x86_64  
 CPU:      Intel(R) Core(TM) i7-7500U CPU @ 2.70GHz  
 Cores:    4 logical
-
----
-
-### Simple Pendulum
-
-Simple pendulum swing-up and stabilization with LTV-MPC:
-
-<img src="examples/simple_pendulum/pendulum_animation.gif" width="400">
-
-Performance with N = 40, dt = 0.02 s on a laptop CPU:
-
-| Stage | Mean | Min | Max |
-|-------|-------|-------|-------|
-| QP eval | 1.12 ms | 1.04 ms | 4.22 ms |
-| QP solve | 0.18 ms | 0.13 ms | 0.82 ms |
-| Total MPC | **1.29 ms** | **1.18 ms** | **5.04 ms** |
-
-Notice that Max time for Total MPC can stay deterministically below dt 
-while getting optimal performance from OSQP (5.04 ms << 20 ms).
 
 ---
 
@@ -268,6 +138,16 @@ while getting optimal performance from OSQP (6.21 ms << 100 ms).
 
 ---
 
+### Simple Rover with ROS2
+
+Simple rover running with the full ROS2 navigation pipeline:
+
+<img src="examples/nav_mpc_ros/nav_mpc_ros.gif" width="400">
+
+
+---
+
+
 ## 📄 License — MIT
 
 Permissive, suitable for commercial + academic use.
@@ -281,13 +161,14 @@ If you use this framework in academic work, please cite or link to:
 Anastasios Tsolakis, *nav_mpc: Realtime Nonlinear MPC via LTV-MPC*, 
 GitHub repository, 2025.
 
+
 ---
 
 ## 📬 Contact
 
-**Anastasios (Tasos) Tsolakis** 
-📧 tas.tsolakis@gmail.com 
-🌐 https://ttsolakis.github.io 
+Anastasios (Tasos) Tsolakis  
+📧 tas.tsolakis@gmail.com  
+🌐 https://ttsolakis.github.io
 
 ---
 
@@ -295,8 +176,4 @@ GitHub repository, 2025.
 >
 > This project is under active development. 
 > APIs, file structure, and features may change.
-> The framework is functional and examples run end-to-end, but some components
-> (e.g. collision avoidance, ROS2 wrapper, horizon visualization) are still evolving.
-
-
-
+> The framework is functional and examples run end-to-end, but some components are still evolving.
