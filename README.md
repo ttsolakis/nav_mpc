@@ -51,9 +51,9 @@ nav_mpc/
 
 ## 🎯 Why nav_mpc? 
 
-**nav_mpc** provides: -
+**nav_mpc** provides:
 
-An easy way to define a full nonlinear MPC problem — dynamics, constraints, and objectives are written symbolically, just like on paper. 
+- An easy way to define a full nonlinear MPC problem — dynamics, constraints, and objectives are written symbolically, just like on paper. 
 - A fast development workflow in Python with integrated simulation and result generation, combined with Cython compilation for ultra-fast numerical evaluation. 
 - Real-time performance: the controller runs ultra-fast with deterministic timing, making it suitable for embedded hardware with tight control-loop deadlines. 
 - A clean, minimal set of dependencies and a research-friendly architecture that enables rapid prototyping, fast iteration, and straightforward extension to new robotic systems. 
