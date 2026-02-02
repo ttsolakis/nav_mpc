@@ -14,6 +14,7 @@ setup(
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (f"share/{package_name}/rviz", glob("rviz/*.rviz")),
         (f"share/{package_name}/urdf", ["urdf/simple_robot.urdf"]),
+        (f"share/{package_name}/urdf", ["urdf/simple_rover.urdf"]),
 
     ],
     install_requires=["setuptools"],

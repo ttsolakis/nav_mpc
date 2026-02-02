@@ -107,7 +107,7 @@ def generate_launch_description():
 
     # --- URDF + robot_state_publisher (optional) ---
     pkg_share = get_package_share_directory("nav_mpc_ros")
-    urdf_path = os.path.join(pkg_share, "urdf", "simple_robot.urdf")
+    urdf_path = os.path.join(pkg_share, "urdf", "simple_rover.urdf")
 
     robot_state_publisher_node = Node(
         package="robot_state_publisher",

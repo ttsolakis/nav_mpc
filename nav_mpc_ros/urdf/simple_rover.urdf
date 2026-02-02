@@ -1,0 +1,180 @@
+<?xml version="1.0"?>
+<robot name="nav_mpc_rover">
+
+  <!-- ========= Materials ========= -->
+  <material name="purple">
+  <color rgba="0.55 0.25 0.75 1.0"/>
+  </material>
+
+  <material name="orange">
+  <color rgba="0.95 0.55 0.1 1.0"/>
+  </material>  
+
+  <material name="black">
+  <color rgba="0.05 0.05 0.05 1.0"/>
+  </material>
+
+  <!-- ========= Tunables (meters) =========
+       Chassis: 0.18 x 0.18 x 0.12
+       Wheel radius: 0.06
+       Wheel thickness: 0.04
+       LiDAR diameter: 0.07
+       LiDAR height: 0.05
+  -->
+
+  <!-- ========= Base / chassis ========= -->
+  <link name="base_link">
+    <visual>
+      <!-- Put the box so the bottom touches z=0 -->
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.18 0.18 0.12"/>
+      </geometry>
+      <material name="purple"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.18 0.18 0.12"/>
+      </geometry>
+    </collision>
+
+    <!-- Rough inertial values (fine for RViz) -->
+    <inertial>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <mass value="3.0"/>
+      <inertia ixx="0.03" ixy="0.0" ixz="0.0" iyy="0.03" iyz="0.0" izz="0.03"/>
+    </inertial>
+  </link>
+
+  <!-- ========= Wheels (fixed) =========
+       Wheel cylinder axis in URDF is along Z by default.
+       Wheels typically spin about Y (or X), so we rotate cylinders
+       to align their axis with Y (rpy: 0 1.5708 0 rotates Z->X,
+       1.5708 0 0 rotates Z->Y). We'll use rpy="1.5708 0 0".
+  -->
+
+  <!-- Helper placements -->
+  <!-- chassis half dims: 0.09, 0.09, 0.06 -->
+  <!-- wheel radius: 0.04, thickness: 0.04 -->
+  <!-- wheels slightly outside the body in +/-Y -->
+  <!-- x offset: +/- (0.09 - 0.04) = +/-0.05 -->
+  <!-- y offset: +/- (0.09 + 0.01) = +/-0.10 -->
+  <!-- z center: wheel radius = 0.04 -->
+
+  <link name="wheel_fl">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="wheel_fr">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="wheel_rl">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="wheel_rr">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.06" length="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Fixed joints to base_link -->
+  <joint name="joint_wheel_fl" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_fl"/>
+    <origin xyz="0.05 0.10 0.04" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="joint_wheel_fr" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_fr"/>
+    <origin xyz="0.05 -0.10 0.04" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="joint_wheel_rl" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_rl"/>
+    <origin xyz="-0.05 0.10 0.04" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="joint_wheel_rr" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_rr"/>
+    <origin xyz="-0.05 -0.10 0.04" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ========= LiDAR on top ========= -->
+  <link name="lidar_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.035" length="0.05"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.0175" length="0.03"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="joint_lidar" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <!-- Put LiDAR base at top surface (z=0.12) with half its height above -->
+    <origin xyz="0 0 0.135" rpy="0 0 0"/>
+  </joint>
+
+</robot>
