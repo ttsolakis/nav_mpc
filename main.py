@@ -26,8 +26,8 @@ def main():
     # -----------------------------------
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
-    from core.problem_setup import setup_path_tracking_unicycle
-    problem_name, system, objective, constraints, collision, animation = setup_path_tracking_unicycle.setup_problem()
+    from core.problem_setup import setup_path_tracking_cybership
+    problem_name, system, objective, constraints, collision = setup_path_tracking_cybership.setup_problem()
 
     print(f"Setting up: {problem_name}")
 
@@ -36,16 +36,16 @@ def main():
     hardware_info = True
 
     # Solver settings (time-limited solver & printing online)
-    embedded = True
-    debugging = True
+    embedded = False
+    debugging = False
     
     # Initial & goal states
-    x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0])  # Initial system state
-    x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0])          # Terminal system state
-    velocity_ref = 0.5                                    # Desired cruising speed [m/s]
+    x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0, 0.0])  # Initial system state
+    x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0, 0.0])          # Terminal system state
+    velocity_ref = 0.5                                         # Desired cruising speed [m/s]
 
     # Horizon, sampling time and total simulation time
-    N    = 25    # steps
+    N    = 30    # steps
     dt   = 0.1   # seconds
     tsim = 15.0  # seconds
 
@@ -74,7 +74,7 @@ def main():
 
     global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=0.15+0.1, cfg=rrt_cfg)
     global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.01, k=3)
-    ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, x_goal=x_goal, v_ref=velocity_ref, goal_indices=[4], window=40, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
+    ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, x_goal=x_goal, v_ref=velocity_ref, goal_indices=[5], window=40, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
 
     end_global_time = time.perf_counter()
     
@@ -179,8 +179,8 @@ def main():
     print("Plotting and saving...")
     plot_state_input_trajectories(system, constraints, dt, logger.x_traj, logger.u_traj, x_ref=x_goal, show=False)
 
-    print("Animating and saving...")
-    animation(system=system, constraints=constraints, dt=dt, x_traj=logger.x_traj, u_traj=logger.u_traj, x_goal=x_goal, X_pred_traj=logger.X_pred_traj, X_ref_traj=logger.X_ref_traj, lidar_scans=logger.scans, occ_map=occ_map, global_path=global_path, collision=collision, col_bounds_traj=logger.col_bounds_traj, col_Axy_traj=logger.col_Axy_traj, show=False, save_gif=True)
+    # print("Animating and saving...")
+    # animation(system=system, constraints=constraints, dt=dt, x_traj=logger.x_traj, u_traj=logger.u_traj, x_goal=x_goal, X_pred_traj=logger.X_pred_traj, X_ref_traj=logger.X_ref_traj, lidar_scans=logger.scans, occ_map=occ_map, global_path=global_path, collision=collision, col_bounds_traj=logger.col_bounds_traj, col_Axy_traj=logger.col_Axy_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()
