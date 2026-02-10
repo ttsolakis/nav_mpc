@@ -41,13 +41,13 @@ def main():
     
     # Initial & goal states
     x_init = np.array([-2.5, -3.5, np.pi / 2, 0.0, 0.0, 0.0])  # Initial system state
-    x_goal = np.array([2.5, 3.5, np.pi, 0.0, 0.0, 0.0])          # Terminal system state
-    velocity_ref = 0.01                                         # Desired cruising speed [m/s]
+    x_goal = np.array([2.5, 3.5, np.pi, 0.02, 0.0, 0.0])          # Terminal system state
+    velocity_ref = 0.02                                         # Desired cruising speed [m/s]
 
     # Horizon, sampling time and total simulation time
     N    = 40    # steps
     dt   = 0.1   # seconds
-    tsim = 20.0  # seconds
+    tsim = 25.0  # seconds
 
     # Enable/disable collision avoidance constraints
     collision_avoidance = False 
@@ -67,7 +67,7 @@ def main():
     lidar = LidarSimulator2D(occ_map=occ_map, cfg=lidar_cfg)
 
     # Path generator configuration
-    rrt_cfg = RRTStarConfig(max_iters=6000, step_size=0.10, neighbor_radius=0.30, goal_sample_rate=0.10, collision_check_step=0.02, seed=1)
+    rrt_cfg = RRTStarConfig(max_iters=10000, step_size=0.10, neighbor_radius=1.0, goal_sample_rate=0.05, collision_check_step=0.02, seed=1)
 
     # --------------------------------------
     # -------- Global Path Planning --------
@@ -78,8 +78,8 @@ def main():
     start_global_time = time.perf_counter()
 
     global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=0.15+1.255/2, cfg=rrt_cfg)
-    global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.01, k=3)
-    ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, x_goal=x_goal, v_ref=velocity_ref, goal_indices=[5], window=40, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
+    global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.05, k=3)
+    ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, x_goal=x_goal, v_ref=velocity_ref, goal_indices=[5], window=N, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
 
     end_global_time = time.perf_counter()
     
