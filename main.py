@@ -42,7 +42,7 @@ def main():
     # Initial & goal states
     x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0, 0.0])  # Initial system state
     x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0, 0.0])          # Terminal system state
-    velocity_ref = 0.5                                         # Desired cruising speed [m/s]
+    velocity_ref = 0.25                                         # Desired cruising speed [m/s]
 
     # Horizon, sampling time and total simulation time
     N    = 30    # steps
@@ -150,18 +150,18 @@ def main():
         if debugging and i == 0:
             print(f"[debug] dumped main first-iter data to: " f"{dump_npz(dump_dir=get_default_debug_dir(get_repo_root_from_file(__file__)), tag='main', step_idx=i, dt=dt, N=N, x=x, X=X, U=U, Xref_seq=Xref_seq, obstacles_xy=obstacles_xy, global_path=global_path)}")
 
-
         # 2) Solve current QP and extract solution
         start_sQP_time = time.perf_counter()
 
         time_limit = max(0.0, dt - (end_uQP_time - start_uQP_time))
-        X, U, u0 = solve_qp(prob, nx, nu, N, embedded, time_limit, i, debugging=debugging, x=x)
+        # X, U, u0 = solve_qp(prob, nx, nu, N, embedded, time_limit, i, debugging=debugging, x=x)
 
         end_sQP_time = time.perf_counter()
 
         # 3) Simulate closed-loop step, lidar scanning, build reference, and log data for plotting/animation
         start_sim_time = time.perf_counter()
 
+        u0 = [5.0, 5.0, 0.0, 0.0, 0.0] # override control for debugging (e.g. open-loop test)
         x  = sim.step(x, u0)
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         pose = np.array([x[0], x[1], x[2]], dtype=float)

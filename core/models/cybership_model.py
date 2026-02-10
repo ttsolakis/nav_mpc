@@ -11,9 +11,9 @@ class CybershipModel(SystemModel):
     This matches the *updated/cleaned* simulator code you posted.
 
     State:
-        x = [px, py, psi, u, v, r]^T
+        x = [px, py, psi, ux, uy, r]^T
             (px, py, psi): position/heading in {n}
-            (u, v, r): body-fixed velocities in {b}
+            (ux, uy, r): body-fixed velocities in {b}
 
     Input:
         u_in = [thrust_left, thrust_right, thrust_bow, azimuth_left, azimuth_right]^T
@@ -21,8 +21,8 @@ class CybershipModel(SystemModel):
             azimuth_*: angles [rad] (body frame)
 
     Dynamics:
-        eta_dot = R(psi) * nu
-        nu_dot  = inv(M) * (tau - (C + D) * nu)
+        eta_dot = R(psi) * v
+        nu_dot  = inv(M) * (tau - (C + D) * v)
 
     where tau is computed from the thruster configuration exactly as in your snippet.
 
@@ -74,7 +74,7 @@ class CybershipModel(SystemModel):
 
         # ===== State =====
         px, py, psi, ux, uy, r = x[0], x[1], x[2], x[3], x[4], x[5]
-        nu = sp.Matrix([ux, uy, r])
+        v = sp.Matrix([ux, uy, r])
 
         # ===== Input (thrusters) =====
         thrust_left, thrust_right, thrust_bow, az_left, az_right = (
@@ -165,13 +165,9 @@ class CybershipModel(SystemModel):
         )
 
         # ===== Added Coriolis matrix C_A (Eq.9 Fossen2021 form) =====
-        # In your cleaned version there is no current, and you use v directly in dv:
-        # so urx=ux, ury=uy.
-        urx = ux
-        ury = uy
 
-        c13 = Yvd * ury + Yrd * r
-        c23 = -Xud * urx
+        c13 = Yvd * uy + Yrd * r
+        c23 = -Xud * ux
         C_A = hydro * sp.Matrix(
             [
                 [0, 0, c13],
@@ -190,11 +186,11 @@ class CybershipModel(SystemModel):
         )
 
         # ===== Nonlinear damping D_NL (Eq.13) =====
-        d11 = -Xuu * sp.Abs(urx) - Xuuu * (urx**2)
-        d22 = -Yvv * sp.Abs(ury) + Yrv * sp.Abs(r)
-        d23 = -Yvr * sp.Abs(ury) - Yrr * sp.Abs(r)
-        d32 = -Nvv * sp.Abs(ury) - Nrv * sp.Abs(r)
-        d33 = -Nvr * sp.Abs(ury) - Nrr * sp.Abs(r)
+        d11 = -Xuu * sp.Abs(ux) - Xuuu * (ux**2)
+        d22 = -Yvv * sp.Abs(uy) + Yrv * sp.Abs(r)
+        d23 = -Yvr * sp.Abs(uy) - Yrr * sp.Abs(r)
+        d32 = -Nvv * sp.Abs(uy) - Nrv * sp.Abs(r)
+        d33 = -Nvr * sp.Abs(uy) - Nrr * sp.Abs(r)
 
         D_NL = hydro * sp.Matrix(
             [
@@ -214,7 +210,7 @@ class CybershipModel(SystemModel):
         tau_y = thrust_left * sp.sin(az_left) + thrust_right * sp.sin(az_right) + thrust_bow
 
         tau_n = (
-            -b_l * thrust_left * sp.cos(az_left)
+            - b_l * thrust_left * sp.cos(az_left)
             + b_r * thrust_right * sp.cos(az_right)
             - l_l * thrust_left * sp.sin(az_left)
             - l_r * thrust_right * sp.sin(az_right)
@@ -224,7 +220,9 @@ class CybershipModel(SystemModel):
         tau = sp.Matrix([tau_x, tau_y, tau_n])
 
         # ===== Continuous dynamics =====
-        eta_dot = R_psi * nu
-        nu_dot = M.inv() * (tau - (C + D) * nu)
+        eta_dot = R_psi * v
+        v_dot = M.LUsolve(tau - (C + D) * v)  # use LUsolve for better numerical stability in codegen instead of explicit inverse
+        # v_dot = M.inv() * (tau - (C + D) * v)
 
-        self.f_sym = sp.Matrix([eta_dot[0], eta_dot[1], eta_dot[2], nu_dot[0], nu_dot[1], nu_dot[2]])
+
+        self.f_sym = sp.Matrix([eta_dot[0], eta_dot[1], eta_dot[2], v_dot[0], v_dot[1], v_dot[2]])
