@@ -55,14 +55,14 @@ class CybershipPathTrackingObjective(Objective):
         # State weights: [px, py, psi, ux, uy, r]
         # Keep psi weight moderate because we also scale e_psi by sqrt(w_psi).
         if Q is None:
-            Q = np.diag([50.0, 50.0, 5.0, 2.0, 2.0, 1.0])
+            Q = np.diag([50.0, 50.0, 10.0, 5.0, 250.0, 0.0])
         if QN is None:
-            QN = np.diag([120.0, 120.0, 10.0, 2.0, 2.0, 1.0])
+            QN = np.diag([50.0, 50.0, 10.0, 5.0, 250.0, 0.0])
 
         # Input weights: penalize thrust + azimuth magnitudes (effort/smoothness)
         if R is None:
             # thrusts often deserve larger penalty than azimuth angles; tune as needed
-            R = np.diag([0.2, 0.2, 0.2, 0.05, 0.05])
+            R = np.diag([1.0, 1.0, 1.0, 3.0, 3.0])
 
         self.Q = np.asarray(Q, dtype=float)
         self.QN = np.asarray(QN, dtype=float)

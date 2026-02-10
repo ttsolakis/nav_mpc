@@ -27,7 +27,7 @@ def main():
 
     # Import system, objective, constraints and animation via setup_<problem>.py file
     from core.problem_setup import setup_path_tracking_cybership
-    problem_name, system, objective, constraints, collision = setup_path_tracking_cybership.setup_problem()
+    problem_name, system, objective, constraints, collision, animation = setup_path_tracking_cybership.setup_problem()
 
     print(f"Setting up: {problem_name}")
 
@@ -40,25 +40,27 @@ def main():
     debugging = False
     
     # Initial & goal states
-    x_init = np.array([-1.0, -2.0, np.pi / 2, 0.0, 0.0, 0.0])  # Initial system state
-    x_goal = np.array([2.0, 2.0, 0.0, 0.0, 0.0, 0.0])          # Terminal system state
-    velocity_ref = 0.25                                         # Desired cruising speed [m/s]
+    x_init = np.array([-2.5, -3.5, np.pi / 2, 0.0, 0.0, 0.0])  # Initial system state
+    x_goal = np.array([2.5, 3.5, np.pi, 0.0, 0.0, 0.0])          # Terminal system state
+    velocity_ref = 0.01                                         # Desired cruising speed [m/s]
 
     # Horizon, sampling time and total simulation time
-    N    = 30    # steps
+    N    = 40    # steps
     dt   = 0.1   # seconds
-    tsim = 15.0  # seconds
+    tsim = 20.0  # seconds
 
     # Enable/disable collision avoidance constraints
     collision_avoidance = False 
 
     # Simulation configuration
-    sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
+    sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=20)
     sim = ContinuousSimulator(system, sim_cfg)
 
     # Occupancy map configuration
-    occ_cfg = OccupancyMapConfig(map_path="map.png", world_width_m=5.0, occupied_threshold=127, invert=False)
+    occ_cfg = OccupancyMapConfig(map_path="map_cybership.png", world_width_m=10.0, occupied_threshold=127, invert=False)
     occ_map = OccupancyMap2D.from_png(occ_cfg)
+    occ_map.plot(start_xy=x_init[:2], goal_xy=x_goal[:2], grid_step=1.0, show=True)
+
 
     # Lidar configuration
     lidar_cfg = LidarConfig(range_max=8.0, angle_increment=np.deg2rad(0.72), seed=1, noise_std=0.0, drop_prob=0.0, ray_step=None)
@@ -75,7 +77,7 @@ def main():
 
     start_global_time = time.perf_counter()
 
-    global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=0.15+0.1, cfg=rrt_cfg)
+    global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=0.15+1.255/2, cfg=rrt_cfg)
     global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.01, k=3)
     ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, x_goal=x_goal, v_ref=velocity_ref, goal_indices=[5], window=40, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
 
@@ -154,14 +156,14 @@ def main():
         start_sQP_time = time.perf_counter()
 
         time_limit = max(0.0, dt - (end_uQP_time - start_uQP_time))
-        # X, U, u0 = solve_qp(prob, nx, nu, N, embedded, time_limit, i, debugging=debugging, x=x)
+        X, U, u0 = solve_qp(prob, nx, nu, N, embedded, time_limit, i, debugging=debugging, x=x)
 
         end_sQP_time = time.perf_counter()
 
         # 3) Simulate closed-loop step, lidar scanning, build reference, and log data for plotting/animation
         start_sim_time = time.perf_counter()
 
-        u0 = [5.0, 5.0, 0.0, 0.0, 0.0] # override control for debugging (e.g. open-loop test)
+        # u0 = [2.0, -5.0, 3.0, np.pi/2, -np.pi/4] # override control for debugging (e.g. open-loop test)
         x  = sim.step(x, u0)
         Xref_seq = ref_builder(global_path=global_path, x=x, N=N)
         pose = np.array([x[0], x[1], x[2]], dtype=float)
@@ -186,7 +188,7 @@ def main():
     plot_state_input_trajectories(system, constraints, dt, logger.x_traj, logger.u_traj, x_ref=x_goal, show=False)
 
     # print("Animating and saving...")
-    # animation(system=system, constraints=constraints, dt=dt, x_traj=logger.x_traj, u_traj=logger.u_traj, x_goal=x_goal, X_pred_traj=logger.X_pred_traj, X_ref_traj=logger.X_ref_traj, lidar_scans=logger.scans, occ_map=occ_map, global_path=global_path, collision=collision, col_bounds_traj=logger.col_bounds_traj, col_Axy_traj=logger.col_Axy_traj, show=False, save_gif=True)
+    animation(system=system, constraints=constraints, dt=dt, x_traj=logger.x_traj, u_traj=logger.u_traj, x_goal=x_goal, X_pred_traj=logger.X_pred_traj, X_ref_traj=logger.X_ref_traj, lidar_scans=logger.scans, occ_map=occ_map, global_path=global_path, collision=collision, col_bounds_traj=logger.col_bounds_traj, col_Axy_traj=logger.col_Axy_traj, show=False, save_gif=True)
 
 if __name__ == "__main__":
     main()

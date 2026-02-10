@@ -4,7 +4,7 @@ from core.models.cybership_model import CybershipModel
 from core.objectives.cybership_path_tracking_objective import CybershipPathTrackingObjective
 from core.constraints.system_constraints.cybership_sys_constraints import CybershipSystemConstraints
 from core.constraints.collision_constraints.halfspace_corridor import HalfspaceCorridorCollisionConfig
-# from simulation.animation.cybership_animation import animate_cybership
+from simulation.animation.cybership_animation import animate_cybership
 
 
 def setup_problem():
@@ -13,6 +13,6 @@ def setup_problem():
     objective = CybershipPathTrackingObjective(system)
     constraints = CybershipSystemConstraints(system)
     collision = HalfspaceCorridorCollisionConfig()
-    # animator = animate_cybership
+    animator = animate_cybership
 
-    return name, system, objective, constraints, collision
+    return name, system, objective, constraints, collision, animator

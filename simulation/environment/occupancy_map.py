@@ -1,7 +1,7 @@
 # nav_mpc/simulation/environment/occupancy_map.py
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
@@ -183,9 +183,7 @@ class OccupancyMap2D:
         has_w = cfg.world_width_m is not None
         has_d = cfg.world_diag_m is not None
         if has_w == has_d:
-            raise ValueError(
-                "OccupancyMapConfig: provide exactly ONE of world_width_m or world_diag_m."
-            )
+            raise ValueError("OccupancyMapConfig: provide exactly ONE of world_width_m or world_diag_m.")
 
         if has_w:
             world_w = float(cfg.world_width_m)
@@ -261,3 +259,113 @@ class OccupancyMap2D:
 
     def is_free_world(self, x: float, y: float) -> bool:
         return not self.is_occupied_world(x, y)
+
+    # --------------------------
+    # Debug plotting (world coords)
+    # --------------------------
+
+    def plot(
+        self,
+        *,
+        start_xy: np.ndarray | Tuple[float, float] | None = None,
+        goal_xy: np.ndarray | Tuple[float, float] | None = None,
+        grid_step: float = 1.0,
+        show_pixel_grid: bool = False,
+        pixel_grid_step: int = 10,
+        annotate_xy: bool = True,
+        title: str = "Occupancy map (world coordinates)",
+        figsize: Tuple[float, float] = (7.0, 7.0),
+        show: bool = True,
+    ):
+        """
+        Plot occupancy map in WORLD coordinates with optional 1m grid and reminder of extents.
+        Very useful to debug: start/goal out-of-bounds or inside (inflated) obstacles.
+
+        Args:
+            start_xy, goal_xy: optional markers plotted in world coordinates.
+            grid_step: world grid spacing [m] for labeled ticks.
+            show_pixel_grid: overlay a faint pixel grid (can be heavy for large images).
+            pixel_grid_step: spacing in pixels for the pixel grid overlay.
+            annotate_xy: write a small text box with world extents and start/goal occupancy.
+        """
+        import matplotlib.pyplot as plt
+
+        occ = np.asarray(self.occ, dtype=float)
+        occ_plot = np.flipud(occ)  # so y increases upward in world
+
+        extent = [self.xmin, self.xmax, self.ymin, self.ymax]
+
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.imshow(
+            occ_plot,
+            extent=extent,
+            origin="lower",
+            cmap="gray_r",
+            interpolation="nearest",
+        )
+
+        ax.set_aspect("equal", "box")
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        ax.set_title(title)
+
+        # World grid/ticks
+        if grid_step and grid_step > 0:
+            xs = np.arange(np.floor(self.xmin), np.ceil(self.xmax) + 1e-9, grid_step)
+            ys = np.arange(np.floor(self.ymin), np.ceil(self.ymax) + 1e-9, grid_step)
+            ax.set_xticks(xs)
+            ax.set_yticks(ys)
+            ax.grid(True, which="both", color="k", alpha=0.25, linewidth=0.8)
+
+        # Optional pixel-grid overlay (lightweight version)
+        if show_pixel_grid and pixel_grid_step > 0:
+            # draw pixel grid lines in world coords
+            # vertical lines (columns)
+            for px in range(0, self.width + 1, int(pixel_grid_step)):
+                xw = self.x0 + px * self.res
+                ax.axvline(xw, color="k", alpha=0.08, linewidth=0.6)
+            # horizontal lines (rows)
+            for py in range(0, self.height + 1, int(pixel_grid_step)):
+                yw = self.y0 + py * self.res
+                ax.axhline(yw, color="k", alpha=0.08, linewidth=0.6)
+
+        # Markers
+        if start_xy is not None:
+            sx, sy = float(start_xy[0]), float(start_xy[1])
+            ax.plot(sx, sy, "go", markersize=10, label="start")
+        if goal_xy is not None:
+            gx, gy = float(goal_xy[0]), float(goal_xy[1])
+            ax.plot(gx, gy, "r*", markersize=12, label="goal")
+
+        if start_xy is not None or goal_xy is not None:
+            ax.legend(loc="upper right")
+
+        # # Annotation box with extents + occupancy checks
+        # if annotate_xy:
+        #     lines = [
+        #         f"extent x: [{self.xmin:.2f}, {self.xmax:.2f}] m",
+        #         f"extent y: [{self.ymin:.2f}, {self.ymax:.2f}] m",
+        #         f"res: {self.res:.4f} m/px  (W={self.width}, H={self.height})",
+        #     ]
+        #     if start_xy is not None:
+        #         sx, sy = float(start_xy[0]), float(start_xy[1])
+        #         lines.append(f"start: ({sx:.2f},{sy:.2f})  in_bounds={self.in_bounds_world(sx, sy)}  occ={self.is_occupied_world(sx, sy)}")
+        #     if goal_xy is not None:
+        #         gx, gy = float(goal_xy[0]), float(goal_xy[1])
+        #         lines.append(f"goal:  ({gx:.2f},{gy:.2f})  in_bounds={self.in_bounds_world(gx, gy)}  occ={self.is_occupied_world(gx, gy)}")
+
+        #     ax.text(
+        #         0.02,
+        #         0.02,
+        #         "\n".join(lines),
+        #         transform=ax.transAxes,
+        #         fontsize=9,
+        #         va="bottom",
+        #         ha="left",
+        #         bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, edgecolor="none"),
+        #     )
+
+        if show:
+            plt.show()
+
+        return fig, ax
