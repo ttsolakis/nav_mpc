@@ -243,6 +243,10 @@ def build_qp(
     nc_col = int(collision.M) if (collision is not None) else 0
     nc = nc_sys + nc_col
 
+    print("-" * 23)
+    print(f"|nx={nx}|nu={nu}|nc={nc_sys}+{nc_col}={nc}|")
+    print("-" * 23)
+
     # ----------------------------
     # Collision metadata
     # ----------------------------

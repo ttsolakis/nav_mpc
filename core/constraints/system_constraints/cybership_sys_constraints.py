@@ -81,10 +81,30 @@ class CybershipSystemConstraints(SystemConstraints):
         self.u_min[4], self.u_max[4] = float(azimuth_right_min), float(azimuth_right_max)
 
     def build_system_constraints(self) -> sp.Matrix:
-        """
-        Additional algebraic constraints in g(x,u) <= 0 form.
+        x = self.x_sym
+        u = self.u_sym
 
-        For this system we only use box bounds (x_min/x_max, u_min/u_max),
-        so there are no extra inequalities.
-        """
-        return sp.Matrix([]).reshape(0, 1)
+        g = []
+
+        # state bounds: x_min <= x <= x_max
+        for i in range(self.state_dim):
+            xmin = float(self.x_min[i])
+            xmax = float(self.x_max[i])
+
+            if np.isfinite(xmax):
+                g.append(x[i] - sp.Float(xmax))
+            if np.isfinite(xmin):
+                g.append(-x[i] + sp.Float(xmin))
+
+        # input bounds: u_min <= u <= u_max
+        for i in range(self.input_dim):
+            umin = float(self.u_min[i])
+            umax = float(self.u_max[i])
+
+            if np.isfinite(umax):
+                g.append(u[i] - sp.Float(umax))
+            if np.isfinite(umin):
+                g.append(-u[i] + sp.Float(umin))
+
+        return sp.Matrix(g).reshape(len(g), 1)
+

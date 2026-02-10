@@ -104,6 +104,7 @@ def main():
     nx = system.state_dim
     nu = system.input_dim
     nc_sys = qp.nc_sys
+    
 
     # Initial state, reference and environment scan
     x = x_init.copy()
@@ -128,6 +129,7 @@ def main():
     # -----------------------------------
     # ------------ Main Loop ------------
     # -----------------------------------
+    
 
     print("Running main loop...")
 
