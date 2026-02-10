@@ -37,12 +37,12 @@ def main():
     hardware_info = True
 
     # Solver settings (time-limited solver & printing online)
-    embedded = False
+    embedded = True
     debugging = False
     
     # Initial & goal states
-    x_init = np.array([-2.5, -3.5, np.pi / 2, 0.0, 0.0, 0.0])  # Initial system state
-    x_goal = np.array([2.5, 3.5, np.pi, 0.02, 0.0, 0.0])          # Terminal system state
+    x_init = np.array([-2.5, -3.5, np.pi / 2, 0.0, 0.0, 0.0])   # Initial system state
+    x_goal = np.array([2.5, 3.5, np.pi, 0.0, 0.0, 0.0])         # Terminal system state
     velocity_ref = 0.02                                         # Desired cruising speed [m/s]
 
     # Horizon, sampling time and total simulation time
