@@ -3,6 +3,7 @@ import numpy as np
 import osqp
 import time
 import os
+import dataclasses
 
 # Import MPC2QP functionality, timing, debugging and logging utilities
 from core.mpc2qp import build_qp, make_workspace, update_qp, solve_qp
@@ -49,8 +50,11 @@ def main():
     dt   = 0.1   # seconds
     tsim = 25.0  # seconds
 
-    # Enable/disable collision avoidance constraints
-    collision_avoidance = False 
+    # Collision avoidance configuration
+    collision_avoidance = True 
+    robot_radius = 1.255/2
+    buffer_radius = 0.1
+    collision = dataclasses.replace(collision, M=16, pos_idx=(0, 1), psi_idx=2, r_robot=robot_radius, r_buffer=buffer_radius, roi=2.0)
 
     # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=20)
@@ -77,7 +81,7 @@ def main():
 
     start_global_time = time.perf_counter()
 
-    global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=0.15+1.255/2, cfg=rrt_cfg)
+    global_path = rrt_star_plan(occ_map=occ_map, start_xy=x_init[:2], goal_xy=x_goal[:2], inflation_radius_m=robot_radius+buffer_radius, cfg=rrt_cfg)
     global_path = smooth_and_resample_path(global_path, ds= 0.05, smoothing=0.05, k=3)
     ref_builder = make_reference_builder(pos_idx=(0, 1), phi_idx=2, v_idx=3, x_goal=x_goal, v_ref=velocity_ref, goal_indices=[5], window=N, max_lookahead_points=N, stop_radius=0.25, stop_ramp=0.50)
 
