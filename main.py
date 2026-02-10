@@ -49,6 +49,9 @@ def main():
     dt   = 0.1   # seconds
     tsim = 15.0  # seconds
 
+    # Enable/disable collision avoidance constraints
+    collision_avoidance = False 
+
     # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=10)
     sim = ContinuousSimulator(system, sim_cfg)
@@ -88,7 +91,8 @@ def main():
 
     start_bQP_time = time.perf_counter()
 
-    qp = build_qp(system=system, objective=objective, constraints=constraints, N=N, dt=dt, collision=collision)
+    collision_cfg = collision if collision_avoidance else None
+    qp = build_qp(system=system, objective=objective, constraints=constraints, N=N, dt=dt, collision=collision_cfg)
 
     end_bQP_time = time.perf_counter()
     
