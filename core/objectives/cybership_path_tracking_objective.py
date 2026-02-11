@@ -24,7 +24,7 @@ class CybershipPathTrackingObjective(Objective):
 
     Notes:
       - Like the unicycle objective, heading error is wrapped to [-pi, pi] and its weight is distance-dependent.
-      - If in your main you only care about position/heading, just set Xref_seq[:,3:]=0.
+      
     """
 
     def __init__(

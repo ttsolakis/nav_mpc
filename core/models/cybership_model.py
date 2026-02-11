@@ -8,8 +8,6 @@ class CybershipModel(SystemModel):
     """
     Cybership 3-DOF planar marine craft with actuator-thrust mapping.
 
-    This matches the *updated/cleaned* simulator code you posted.
-
     State:
         x = [px, py, psi, ux, uy, r]^T
             (px, py, psi): position/heading in {n}
@@ -17,18 +15,15 @@ class CybershipModel(SystemModel):
 
     Input:
         u_in = [thrust_left, thrust_right, thrust_bow, azimuth_left, azimuth_right]^T
-            thrust_*:  force magnitudes [N] (sign convention as in your code)
+            thrust_*:  force magnitudes [N]
             azimuth_*: angles [rad] (body frame)
 
     Dynamics:
         eta_dot = R(psi) * v
-        nu_dot  = inv(M) * (tau - (C + D) * v)
+        v_dot   = M^{-1} * (tau - (C + D) * v)
 
-    where tau is computed from the thruster configuration exactly as in your snippet.
+    where tau is computed from the thruster configuration.
 
-    Notes:
-    - This version has *no current / wind / wave* terms (since you removed them).
-    - Nonlinear damping uses Abs(.) to match cas.fabs(.) behavior.
     """
 
     def __init__(

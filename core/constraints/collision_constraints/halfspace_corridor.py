@@ -15,7 +15,7 @@ class HalfspaceCorridorCollisionConfig:
 
         A_xy[k,i,:] @ p <= b[k,i],     i = 0..M-1
 
-    where p = (x,y) are the decision variables for the robot center at stage k (applied to x_{k+1} in your QP).
+    where p = (x,y) are the decision variables for the robot center at stage k (applied to x_{k+1} in QP).
 
     Two selection modes are supported:
       - pick="closest":
