@@ -50,9 +50,9 @@ def main():
 
     # Collision avoidance configuration
     collision_avoidance = True 
-    robot_radius = 1.255/2
-    buffer_radius = 0.1
-    collision = dataclasses.replace(collision, M=16, pos_idx=(0, 1), psi_idx=2, r_robot=robot_radius, r_buffer=buffer_radius, roi=2.0)
+    robot_radius = 1.250/2
+    buffer_radius = 0.0
+    collision = dataclasses.replace(collision, M=16, pos_idx=(0, 1), psi_idx=2, r_robot=robot_radius, r_buffer=buffer_radius, roi=3.0)
 
     # Simulation configuration
     sim_cfg = SimulatorConfig(dt=dt, method="rk4", substeps=20)

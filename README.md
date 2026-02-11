@@ -45,7 +45,8 @@ nav_mpc/
 ### 🔌 **4. Extensible to arbitrary systems**
 - Simple pendulum
 - Double pendulum 
-- Kinematic Rover
+- Kinematic Rover (UGV)
+- Cybership (ASV)
 
 --- 
 
@@ -155,6 +156,26 @@ Simple rover running with the full ROS2 navigation pipeline:
 
 <img src="examples/nav_mpc_ros/nav_mpc_ros.gif" width="400">
 
+
+---
+
+### Cybership
+
+Cybership model (ASV) path tracking with LTV-MPC and 16 half-space corridor constraints per stage:
+
+<img src="examples/cybership/cybership_animation.gif" width="400">
+
+Performance with N = 30, dt = 0.1 s on a laptop CPU:
+
+| Stage | Mean | Min | Max |
+|-------|-------|-------|-------|
+| QP eval | 2.93 ms | 2.56 ms | 4.73 ms |
+| QP solve | 1.38 ms | 0.61 ms | 22.56 ms |
+| Total MPC | **4.32 ms** | **3.18 ms** | **25.73 ms** |
+
+Notice that Max time for Total MPC can stay deterministically below dt 
+while getting optimal performance from OSQP (25.73 ms < 100 ms) even
+for a complex nonlinear hydrodynamic ASV model.
 
 ---
 
