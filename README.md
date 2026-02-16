@@ -44,23 +44,13 @@ These expressions may be **fully nonlinear**.
 
 A standard continuous-time NMPC problem over horizon $T = N\,\Delta t$ is:
 
-$$
-\min_{u(\cdot)}
-\int_{0}^{T}
-\left(
-\tfrac12 e(x(t),r(t))^\top Q e(x(t),r(t))
-+
-\tfrac12 (u(t)-u_{\mathrm{ref}})^\top R (u(t)-u_{\mathrm{ref}})
-\right) dt
-+ \tfrac12 e(x(T),r(T))^\top Q_N e(x(T),r(T))
-$$
-
-$$
-\text{s.t. }
-\dot{x}(t)=f(x(t),u(t)),\quad
-g(x(t),u(t))\le 0,\quad
-x(0)=x_{\text{meas}}
-$$
+\begin{aligned}
+\min_{u(\cdot)}\quad & \int_{0}^{T} \left( \tfrac{1}{2} e(x(t),r(t))^\top Q e(x(t),r(t)) + \tfrac{1}{2} (u(t)-u_{\mathrm{ref}})^\top R (u(t)-u_{\mathrm{ref}}) \right) dt \\
+& + \tfrac{1}{2} e(x(T),r(T))^\top Q_N e(x(T),r(T)) \\
+\text{s.t.}\quad & \dot{x}(t)=f(x(t),u(t)), \\
+& g(x(t),u(t))\le 0, \\
+& x(0)=x_{\text{meas}}.
+\end{aligned}
 
 where $e,f,g$ are nonlinear functions.
 
