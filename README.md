@@ -37,14 +37,14 @@ The key idea is:
 The user defines (symbolically):
 
 - dynamics: $\dot{x}(t) = f(x(t), u(t))$
-- constraints: \(g(x(t), u(t)) \le 0\)
-- tracking / objective error: \(e(x(t), r(t))\)
+- constraints: $g(x(t), u(t)) \le 0$
+- tracking / objective error: $e(x(t), r(t))$
 
 These expressions may be **fully nonlinear**.
 
-A standard continuous-time NMPC problem over horizon \(T = N\,\Delta t\) is:
+A standard continuous-time NMPC problem over horizon $T = N\,\Delta t$ is:
 
-\[
+$
 \begin{aligned}
 \min_{u(\cdot)}\quad &
 \int_{0}^{T}
@@ -58,9 +58,9 @@ A standard continuous-time NMPC problem over horizon \(T = N\,\Delta t\) is:
 \quad & g(x(t),u(t))\le 0,\\[1mm]
 \quad & x(0)=x_{\text{meas}}.
 \end{aligned}
-\]
+$
 
-where \(e,f,g\) are nonlinear functions.
+where $e,f,g$ are nonlinear functions.
 
 
 ### LTV-MPC and QP formulation in OSQP
@@ -77,17 +77,17 @@ This problem is now **quadratic with linear constraints**, which means it can be
 
 OSQP expects problems of the form
 
-\[
+$
 \begin{aligned}
 \min_z & \tfrac12 z^\top P z + q^\top z
 \\[1mm]
 \text{s.t.}\quad & l \le A z \le u.
 \end{aligned}
-\]
+$
 
 We therefore stack all states and inputs into one vector
 
-\[
+$
 z =
 \begin{bmatrix}
 x_0\\ \vdots\\ x_N\\
@@ -95,28 +95,28 @@ u_0\\ \vdots\\ u_{N-1}
 \end{bmatrix},
 \qquad
 n_z=(N+1)n_x + N n_u.
-\]
+$
 
 All MPC constraints can be written compactly as
 
-\[
+$
 A=\begin{bmatrix}A_{\mathrm{eq}}\\ A_{\mathrm{ineq}}\end{bmatrix},\quad
 l=\begin{bmatrix}b_{\mathrm{eq}}\\ l_{\mathrm{ineq}}\end{bmatrix},\quad
 u=\begin{bmatrix}b_{\mathrm{eq}}\\ u_{\mathrm{ineq}}\end{bmatrix}.
-\]
+$
 
 Importantly:
 
-> **The sparsity pattern of \(P\) and \(A\) is constant: Only their numerical values change each MPC step.**
+> **The sparsity pattern of $P$ and $A$ is constant: Only their numerical values change each MPC step.**
 
 #### Objective function
 
-The quadratic cost has the OSQP form \(\tfrac12 z^\top P z + q^\top z\), where the Hessian is block diagonal:
+The quadratic cost has the OSQP form $\tfrac12 z^\top P z + q^\top z$, where the Hessian is block diagonal:
 
-\[
+$
 P_k=\mathrm{diag}\!\big(Q_0,\ldots,Q_N,\;R_0,\ldots,R_{N-1}\big)
 \in \mathbb{R}^{n_z\times n_z}.
-\]
+$
 
 
 ```text
@@ -134,14 +134,14 @@ P_k = blkdiag( Q_0, ..., Q_N, R_0, ..., R_{N-1} )
 ```
 The linear term arises from expanding tracking penalties:
 
-\[
+$
 (x_k-x_r)^\top Q (x_k-x_r)
 = x_k^\top Q x_k - 2 x_r^\top Q x_k + \text{const}.
-\]
+$
 
 Thus
 
-\[
+$
 q =
 \begin{bmatrix}
 -\,Q_0 x_r\\
@@ -151,64 +151,64 @@ q =
 \vdots\\
 -\,R_{N-1} u_{\mathrm{ref}}
 \end{bmatrix}.
-\]
+$
 
-If the tracking error is nonlinear \(e(x,r)\), we linearize it:
+If the tracking error is nonlinear $e(x,r)$, we linearize it:
 
-\[
+$
 e(x_k,r_k)
 \approx e(\bar{x}_k,r_k) + E_k(x_k-\bar{x}_k).
-\]
+$
 
 Define
 
-\[
+$
 b_k^e = e(\bar{x}_k,r_k) - E_k \bar{x}_k.
-\]
+$
 
 Then
 
-\[
+$
 e(x_k,r_k) \approx E_k x_k + b_k^e.
-\]
+$
 
 Substituting into the quadratic cost produces a local quadratic approximation:
 
-\[
+$
 Q_k^{\text{local}} = E_k^\top Q E_k,
 \qquad
 q_k^{\text{local}} = E_k^\top Q b_k^e.
-\]
+$
 
 This is how nonlinear objectives become QP-compatible.
 
 
 #### Dynamics (equality constraints)
 
-Using the **linearization trajectory** \(\{\bar{x}_k,\bar{u}_k\}_{k=0}^{N-1}\) we discretize and linearize the dynamics around \((\bar{x}_k,\bar{u}_k)\):
+Using the **linearization trajectory** $\{\bar{x}_k,\bar{u}_k\}_{k=0}^{N-1}$ we discretize and linearize the dynamics around $(\bar{x}_k,\bar{u}_k)$:
 
-\[
+$
 x_{k+1} \approx A_k\,x_k + B_k\,u_k + c_k,
-\]
+$
 
-where \(A_k,B_k,c_k\) are produced from exact symbolic Jacobians and a (2nd-order) Taylor discretization:
+where $A_k,B_k,c_k$ are produced from exact symbolic Jacobians and a (2nd-order) Taylor discretization:
 
-\[
+$
 A_k = A_d(\bar{x}_k,\bar{u}_k),\quad
 B_k = B_d(\bar{x}_k,\bar{u}_k),\quad
 c_k = c_d(\bar{x}_k,\bar{u}_k).
-\]
+$
 
 Stacked into OSQP equalities, we write the residual form:
 
-\[
+$
 x_0 = x_{\text{meas}},\qquad
 x_{k+1}-A_k x_k - B_k u_k = c_k,\ \ k=0,\ldots,N-1.
-\]
+$
 
 This yields
 
-\[
+$
 A_{\mathrm{eq}} z = b_{\mathrm{eq}},
 \qquad
 b_{\mathrm{eq}}=
@@ -219,9 +219,9 @@ c_0\\
 c_{N-1}
 \end{bmatrix}
 \in\mathbb{R}^{(N+1)n_x}.
-\]
+$
 
-The matrix \(A_{\mathrm{eq}}\in\mathbb{R}^{(N+1)n_x\times n_z}\) has the standard MPC band structure with constant sparsity:
+The matrix $A_{\mathrm{eq}}\in\mathbb{R}^{(N+1)n_x\times n_z}$ has the standard MPC band structure with constant sparsity:
 
 ```text
 A_eq =
@@ -234,23 +234,23 @@ A_eq =
 
 In OSQP bound form, we enforce equalities by setting:
 
-\[
+$
 l_{\mathrm{eq}} = u_{\mathrm{eq}} = b_{\mathrm{eq}}.
-\]
+$
 
 #### Inequalities
 
-Nonlinear inequality constraints \(g(x_k,u_k)\le 0\) are linearized per stage:
+Nonlinear inequality constraints $g(x_k,u_k)\le 0$ are linearized per stage:
 
-\[
+$
 G_k^x x_k + G_k^u u_k \le b_k,
 \qquad
 b_k := -\Big(g(\bar{x}_k,\bar{u}_k) - G^x_k\bar{x}_k - G^u_k\bar{u}_k\Big).
-\]
+$
 
-These constraints are stacked into a sparse block \(A_g z \le b\). In OSQP bound form, such inequalities use \(-\infty\) as the lower bound.
+These constraints are stacked into a sparse block $A_g z \le b$. In OSQP bound form, such inequalities use $-\infty$ as the lower bound.
 
-Nonlinear inequality constraints \(g(x_k,u_k)\le 0\) are linearized as:
+Nonlinear inequality constraints $g(x_k,u_k)\le 0$ are linearized as:
 
 $$
 g(x_k, u_k) \approx g(\bar{x}_k, \bar{u}_k) + G_{k}^{x}(x_k - \bar{x}_k) + G_{k}^{u}(u_k - \bar{u}_k) \le 0
@@ -258,28 +258,28 @@ $$
 
 Rearranging yields:
 
-\[
+$
 G^x_k\,x_k + G^u_k\,u_k \le
 b_k,\qquad
 b_k := -\Big(g(\bar{x}_k,\bar{u}_k) - G^x_k\bar{x}_k - G^u_k\bar{u}_k\Big).
-\]
+$
 
-All inequalities are stacked into \(A_{\mathrm{ineq}} z \le u_{\mathrm{ineq}}\) and represented in OSQP bound form using \((l,u)\) with \(l=-\infty\) on inequality rows.
+All inequalities are stacked into $A_{\mathrm{ineq}} z \le u_{\mathrm{ineq}}$ and represented in OSQP bound form using $(l,u)$ with $l=-\infty$ on inequality rows.
 
 ### Offline vs online in `nav_mpc` (how it stays fast)
 
 **Offline (`core/mpc2qp/qp_offline.py`)**
-- Build the **fixed sparsity pattern** of \(P\) and \(A\) once (CSC format).
-- Precompute **index maps** pointing to exact memory locations of time-varying entries (e.g., where \(-A_k\), \(-B_k\), \(G^x_k\), \(G^u_k\) live inside `A.data`).
+- Build the **fixed sparsity pattern** of $P$ and $A$ once (CSC format).
+- Precompute **index maps** pointing to exact memory locations of time-varying entries (e.g., where $-A_k$, $-B_k$, $G^x_k$, $G^u_k$ live inside `A.data`).
 - Generate compiled stage kernels via SymPy Jacobians + `autowrap(..., backend="cython")`:
-  - \(A_k(\bar{x}_k,\bar{u}_k),\ B_k(\bar{x}_k,\bar{u}_k),\ c_k(\bar{x}_k,\bar{u}_k)\)
-  - \(G^x_k(\bar{x}_k,\bar{u}_k),\ G^u_k(\bar{x}_k,\bar{u}_k),\ g(\bar{x}_k,\bar{u}_k)\)
-  - \(e(\bar{x}_k,r_k),\ E_k(\bar{x}_k,r_k)\)
+  - $A_k(\bar{x}_k,\bar{u}_k),\ B_k(\bar{x}_k,\bar{u}_k),\ c_k(\bar{x}_k,\bar{u}_k)$
+  - $G^x_k(\bar{x}_k,\bar{u}_k),\ G^u_k(\bar{x}_k,\bar{u}_k),\ g(\bar{x}_k,\bar{u}_k)$
+  - $e(\bar{x}_k,r_k),\ E_k(\bar{x}_k,r_k)$
 
 **Online (`core/mpc2qp/qp_online.py`)**
 - Shift the previous solution to get new linearization points:
-  \(\bar{x}_k \leftarrow x^*_{k+1}\), \(\bar{u}_k \leftarrow u^*_{k+1}\) (with terminal extrapolation).
-- Evaluate compiled kernels stage-wise to obtain \(\{A_k,B_k,c_k,G^x_k,G^u_k,b_k\}\).
+  $\bar{x}_k \leftarrow x^*_{k+1}$, $\bar{u}_k \leftarrow u^*_{k+1}$ (with terminal extrapolation).
+- Evaluate compiled kernels stage-wise to obtain $\{A_k,B_k,c_k,G^x_k,G^u_k,b_k\}$.
 - Overwrite **only** time-varying values in `A.data`, `l`, `u`, and (optionally) `P.data`, `q` using the precomputed index maps (no sparsity changes, no reallocations).
 - Call OSQP `prob.update(Px=..., q=..., Ax=..., l=..., u=...)` and solve.
 
@@ -290,15 +290,14 @@ This design leverages the fact that OSQP requires a **constant sparsity pattern*
 At runtime each MPC iteration performs:
 
 1. Shift previous solution → new linearization points  
-2. Evaluate Jacobians → obtain \(A_k,B_k,c_k,G_k\)  
-3. Update numeric entries of \(P,q,A,l,u\)  
+2. Evaluate Jacobians → obtain $A_k,B_k,c_k,G_k$  
+3. Update numeric entries of $P,q,A,l,u$  
 4. Solve QP with OSQP  
 
 Because sparsity is fixed → updates are extremely fast.
 Because problem is quadratic → solution is extremely fast.
 
 ---
-
 
 ## ✨ Key Features
 
