@@ -44,7 +44,7 @@ These expressions may be **fully nonlinear**.
 
 A standard continuous-time NMPC problem over horizon $T = N\,\Delta t$ is:
 
-$
+$$
 \begin{aligned}
 \min_{u(\cdot)}\quad &
 \int_{0}^{T}
@@ -52,13 +52,16 @@ $
 \tfrac12\, e(x(t),r(t))^\top Q\, e(x(t),r(t))
 +
 \tfrac12\, (u(t)-u_{\mathrm{ref}})^\top R\, (u(t)-u_{\mathrm{ref}})
-\Big)\,dt + \tfrac12\, e(x(T),r(T))^\top Q_N\, e(x(T),r(T))
+\Big)\,dt
 \\[1mm]
-\text{s.t.}\quad & \dot{x}(t)=f(x(t),u(t)),\\[1mm]
-\quad & g(x(t),u(t))\le 0,\\[1mm]
-\quad & x(0)=x_{\text{meas}}.
+&\quad + \tfrac12\, e(x(T),r(T))^\top Q_N\, e(x(T),r(T))
+\\[1mm]
+\text{s.t.}\quad &
+\dot{x}(t)=f(x(t),u(t)),\\[1mm]
+& g(x(t),u(t))\le 0,\\[1mm]
+& x(0)=x_{\text{meas}}.
 \end{aligned}
-$
+$$
 
 where $e,f,g$ are nonlinear functions.
 
