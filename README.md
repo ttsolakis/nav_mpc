@@ -17,6 +17,13 @@ The framework combines:
 
 Together, these components enable deterministic nonlinear MPC on modest hardware, suitable for embedded robotic applications such as **UGVs**, **USVs**, **UAVs**, and more.
 
+<p align="center">
+  <img src="docs/nav_mpc_bd.png" width="900">
+</p>
+
+<p align="center"><em>Architecture overview of nav_mpc: symbolic nonlinear MPC compiled into real-time LTV-QP control with integrated simulation loop.</em></p>
+
+
 ---
 
 ## ✨ Key Features
@@ -39,6 +46,7 @@ nav_mpc/
 ├── simulation/         # map/path/lidar + simulator + plotting/animations
 ├── utils/              # profiling, debugging, logging, system info
 ├── nav_mpc_ros/        # ROS 2 package wrapping core/ + simulation/ as nodes
+├── docs/               # documents and examples
 └── main.py             # ROS-agnostic MPC runner (example entry point)
 ```
 
@@ -135,7 +143,7 @@ while getting optimal performance from OSQP (3.88 ms << 20 ms).
 
 Simple kinematic rover (unicycle) model path tracking with LTV-MPC and 36 half-space corridor constraints per stage:
 
-<img src="examples/simple_unicycle/unicycle_animation.gif" width="400">
+<img src="docs/examples/simple_unicycle/unicycle_animation.gif" width="400">
 
 Performance with N = 25, dt = 0.1 s on a laptop CPU:
 
@@ -154,7 +162,7 @@ while getting optimal performance from OSQP (6.21 ms << 100 ms).
 
 Simple rover running with the full ROS2 navigation pipeline:
 
-<img src="examples/nav_mpc_ros/nav_mpc_ros.gif" width="400">
+<img src="docs/examples/nav_mpc_ros/nav_mpc_ros.gif" width="400">
 
 
 ---
@@ -163,7 +171,7 @@ Simple rover running with the full ROS2 navigation pipeline:
 
 Cybership model (ASV) path tracking with LTV-MPC and 16 half-space corridor constraints per stage:
 
-<img src="examples/cybership/cybership_animation.gif" width="400">
+<img src="docs/examples/cybership/cybership_animation.gif" width="400">
 
 Performance with N = 30, dt = 0.1 s on a laptop CPU:
 
