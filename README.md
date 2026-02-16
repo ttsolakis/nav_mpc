@@ -36,7 +36,7 @@ The key idea is:
 
 The user defines (symbolically):
 
-- dynamics: \(\dot{x}(t) = f(x(t), u(t))\)
+- dynamics: $\dot{x}(t) = f(x(t), u(t))$
 - constraints: \(g(x(t), u(t)) \le 0\)
 - tracking / objective error: \(e(x(t), r(t))\)
 
