@@ -1,9 +1,9 @@
-# nav_mpc/mpc2qp/qp_offline.py
+# core/mpc2qp/qp_offline.py
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Any
 
 import numpy as np
 import sympy as sp
@@ -15,6 +15,43 @@ from core.objectives.objectives import Objective
 from core.constraints.sys_constraints import SystemConstraints
 from core.constraints.collision_constraints.halfspace_corridor import HalfspaceCorridorCollisionConfig
 
+
+# ============================================================
+# Optional MPCC metadata (stored offline, used online)
+# ============================================================
+
+@dataclass(frozen=True, slots=True)
+class MPCCMeta:
+    """
+    Offline-stored metadata needed by qp_online to inject MPCC costs.
+
+    Notes:
+    - `path` is stored as Any to avoid import cycles (ArcLengthPath lives in core/augmentations).
+    - Indices refer to the (possibly augmented) system used to build this QP.
+    """
+    enabled: bool = False
+    path: Any | None = None
+
+    # indices in (augmented) state/input
+    pos_idx: tuple[int, int] = (0, 1)   # (ix, iy) in x
+    s_idx: int = -1                     # index of progress state s in x
+    vs_u_idx: int = -1                  # index of progress speed v_s in u
+
+    # optional: platform-specific indices for coupling later
+    speed_state_idx: int | None = None  # e.g. surge u index for Cybership
+    psi_idx: int | None = None          # heading index (for coupling if needed)
+
+    # weights / references for MPCC cost injection (online)
+    w_contour: float = 0.0
+    w_lag: float = 0.0
+    w_vs: float = 0.0
+    w_couple: float = 0.0
+    v_ref: float = 0.0
+
+
+# ============================================================
+# QP structures built offline
+# ============================================================
 
 @dataclass(frozen=True, slots=True)
 class QPStructures:
@@ -73,14 +110,22 @@ class QPStructures:
     M_col: int                          # == collision.M (kept for convenience)
     eps_norm: float
 
-
     # CSC index maps for collision coefficients
     idx_Cx: np.ndarray | None           # (N, nc_col) indices into A_init.data
     idx_Cy: np.ndarray | None           # (N, nc_col) indices into A_init.data
     idx_Cxy: np.ndarray | None          # (N, nc_col, 2) convenience pack
 
+    # MPCC augmentation (optional metadata; no sparsity changes here)
+    mpcc: MPCCMeta | None
 
-def _build_discretized_linearized_dynamics(system: SystemModel, dt: float) -> Tuple[Callable, Callable, Callable]:
+
+# ============================================================
+# Compiled kernels (offline)
+# ============================================================
+
+def _build_discretized_linearized_dynamics(
+    system: SystemModel, dt: float
+) -> Tuple[Callable, Callable, Callable]:
     """
     Build *stage-wise* numeric callables:
 
@@ -90,7 +135,6 @@ def _build_discretized_linearized_dynamics(system: SystemModel, dt: float) -> Tu
 
     using exact symbolic Jacobians, but only for ONE stage (small matrices), not the whole horizon.
     """
-
     nx = system.state_dim
     nu = system.input_dim
 
@@ -221,6 +265,10 @@ def _csc_position(A_csc: sparse.csc_matrix, row: int, col: int) -> int:
     raise KeyError(f"Entry ({row},{col}) not found in CSC pattern.")
 
 
+# ============================================================
+# Main offline builder
+# ============================================================
+
 def build_qp(
     system: SystemModel,
     objective: Objective,
@@ -228,6 +276,7 @@ def build_qp(
     N: int,
     dt: float,
     collision: HalfspaceCorridorCollisionConfig | None = None,
+    mpcc: MPCCMeta | None = None,
 ) -> QPStructures:
     """
     Offline "factory" that builds OSQP matrices with constant sparsity + index maps
@@ -248,6 +297,41 @@ def build_qp(
     print("-" * 23)
 
     # ----------------------------
+    # MPCC metadata sanity checks (optional)
+    # ----------------------------
+    if mpcc is not None and mpcc.enabled:
+        if mpcc.path is None:
+            raise ValueError("mpcc.enabled=True but mpcc.path is None.")
+
+        ix, iy = mpcc.pos_idx
+        if ix == iy:
+            raise ValueError("mpcc.pos_idx must have distinct indices (x,y).")
+        if not (0 <= ix < nx and 0 <= iy < nx):
+            raise ValueError(f"mpcc.pos_idx {mpcc.pos_idx} out of range for nx={nx}.")
+        if not (0 <= mpcc.s_idx < nx):
+            raise ValueError(f"mpcc.s_idx {mpcc.s_idx} out of range for nx={nx}.")
+        if not (0 <= mpcc.vs_u_idx < nu):
+            raise ValueError(f"mpcc.vs_u_idx {mpcc.vs_u_idx} out of range for nu={nu}.")
+
+        if mpcc.speed_state_idx is not None and not (0 <= mpcc.speed_state_idx < nx):
+            raise ValueError(f"mpcc.speed_state_idx {mpcc.speed_state_idx} out of range for nx={nx}.")
+
+        if mpcc.psi_idx is not None and not (0 <= mpcc.psi_idx < nx):
+            raise ValueError(f"mpcc.psi_idx {mpcc.psi_idx} out of range for nx={nx}.")
+
+        # basic numeric checks
+        for name, val in (
+            ("w_contour", mpcc.w_contour),
+            ("w_lag", mpcc.w_lag),
+            ("w_vs", mpcc.w_vs),
+            ("w_couple", mpcc.w_couple),
+            ("v_ref", mpcc.v_ref),
+        ):
+            if not np.isfinite(float(val)):
+                raise ValueError(f"mpcc.{name} must be finite, got {val}.")
+
+
+    # ----------------------------
     # Collision metadata
     # ----------------------------
     psi_idx = None
@@ -257,7 +341,7 @@ def build_qp(
     roi = 0.0
     M_col = 0
     eps_norm = 1e-9
-    
+
     if nc_col > 0:
         psi_idx = collision.psi_idx
         pos_idx = collision.pos_idx
@@ -272,10 +356,8 @@ def build_qp(
             raise ValueError("collision.pos_idx must have distinct indices (x,y).")
         if not (0 <= ix < nx and 0 <= iy < nx):
             raise ValueError(f"collision.pos_idx {pos_idx} out of range for nx={nx}.")
-        
         if not (0 <= psi_idx < nx):
             raise ValueError(f"collision.psi_idx {psi_idx} out of range for nx={nx}.")
-
 
     n_z = (N + 1) * nx + N * nu
     n_eq = (N + 1) * nx
@@ -559,4 +641,5 @@ def build_qp(
         idx_Cx=idx_Cx,
         idx_Cy=idx_Cy,
         idx_Cxy=idx_Cxy,
+        mpcc=mpcc,
     )
