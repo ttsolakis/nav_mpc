@@ -23,6 +23,8 @@ Together, these components enable deterministic nonlinear MPC on modest hardware
 
 <p align="center"><em>Architecture overview of nav_mpc: symbolic nonlinear MPC compiled into real-time LTV-QP control with integrated simulation loop.</em></p>
 
+The full mathematical derivation underlying `nav_mpc` is provided in [`docs/nav_mpc_math_background.pdf`](docs/nav_mpc_math_background.pdf).
+
 ---
 
 ## ✨ Key Features
