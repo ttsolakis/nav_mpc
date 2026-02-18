@@ -125,7 +125,7 @@ Cores:    4 logical
 
 Double pendulum swing-up and stabilization with LTV-MPC:
 
-<img src="examples/double_pendulum/double_pendulum_animation.gif" width="400">
+<img src="docs/examples/double_pendulum/double_pendulum_animation.gif" width="400">
 
 Performance with N = 40, dt = 0.02 s on a laptop CPU:
 
